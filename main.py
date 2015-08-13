@@ -11,8 +11,7 @@ import theano
 import theano.tensor as T
 
 class Model:
-    def __init__(self, train_file, test_file, output_size=150, max_Q_len=320, max_A_len=1):
-        self.max_Q_len = max_Q_len
+    def __init__(self, train_file, test_file, output_size=150):
         self.train_lines, self.test_lines = self.get_lines(train_file), self.get_lines(test_file)
         lines = np.concatenate([self.train_lines, self.test_lines], axis=0)
 
@@ -20,21 +19,24 @@ class Model:
         self.vectorizer.fit([x['text'] + ' ' + x['answer'] if 'answer' in x else x['text'] for x in lines])
 
         X = self.vectorizer.transform([x['text'] for x in lines]).toarray().astype(np.float32)
-        self.C_train, self.Q_train, self.A_train = self.get_dataset(self.train_lines, X[:len(self.train_lines)])
-        self.C_test, self.Q_test, self.A_test = self.get_dataset(self.test_lines, X[len(self.train_lines):])
-        print self.C_train.shape, self.Q_train.shape, self.A_train.shape
-        print self.C_test.shape, self.Q_test.shape, self.A_test.shape
+        self.C_train, self.Q_train, self.A_train, train_max_seqlen = self.get_dataset(self.train_lines, X[:len(self.train_lines)])
+        self.C_test, self.Q_test, self.A_test, test_max_seqlen = self.get_dataset(self.test_lines, X[len(self.train_lines):])
+
+        print self.Q_train.shape, self.A_train.shape
+        print self.Q_test.shape, self.A_test.shape
+        print len(lines), train_max_seqlen, test_max_seqlen
+        max_Q_seqlen = max(train_max_seqlen, test_max_seqlen)
 
         return
 
         vocab_size = len(self.vectorizer.vocabulary_)
 
         Q_W = np.arange(vocab_size * embedding_size).reshape((vocab_size, embedding_size)).astype(theano.config.floatX)
-        l_Q_in = lasagne.layers.InputLayer(shape=(batch_size, max_Q_len))
+        l_Q_in = lasagne.layers.InputLayer(shape=(batch_size, max_Q_len * vocab_size))
         l_Q_embedding = lasagne.layers.EmbeddingLayer(l_Q_in, input_size=vocab_size, output_size=embedding_size, W=Q_W)
 
         A_W = np.arange(vocab_size * embedding_size).reshape((vocab_size, embedding_size)).astype(theano.config.floatX)
-        l_A_in = lasagne.layers.InputLayer(shape=(batch_size, max_A_len))
+        l_A_in = lasagne.layers.InputLayer(shape=(batch_size, 1 * vocab_size))
         l_A_embedding = lasagne.layers.EmbeddingLayer(l_A_in, input_size=vocab_size, output_size=embedding_size, W=A_W)
 
         l_prob = InnerProductLayer(l_Q_embedding, l_A_embedding, nonlinearity=lasagne.nonlinearities.softmax)
@@ -46,18 +48,19 @@ class Model:
 
     def get_dataset(self, lines, vectorized_lines):
         C, Q, A = [], [], []
+        max_seqlen = 0
         for i,line in enumerate(lines):
             if line['type'] == 'q':
                 id = line['id']-1
-                indices = [idx+1 for idx in range(i-id, i) if lines[idx]['type'] != 'q']
-                indices += [0] * (self.max_Q_len - len(indices))
+                indices = [idx+1 for idx in range(i-id, i) if lines[idx]['type'] == 's']
+                max_seqlen = max(len(indices), max_seqlen)
                 C.append(indices)
                 Q.append(i+1)
                 A.append(line['answer'])
-        return np.array(C, dtype=np.int32), np.array(Q, dtype=np.int32), self.vectorizer.transform(A)
+        return C, np.array(Q, dtype=np.int32), self.vectorizer.transform(A), max_seqlen
 
     def get_lines(self, fname):
-        lines = []
+        lines = [{'type':'s', 'text':''}]
         for i,line in enumerate(open(fname)):
             id = int(line[0:line.find(' ')])
             line = line.strip()
