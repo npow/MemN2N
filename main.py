@@ -31,8 +31,7 @@ class InnerProductLayer(MergeLayer):
         u = inputs[1]
         output = T.batched_dot(M, u)
         if self.nonlinearity is not None:
-            shape = output.shape
-            output = self.nonlinearity(output.reshape((shape[0], -1))).reshape(shape)
+            output = self.nonlinearity(output)
         return output
 
 class BatchedDotLayer(MergeLayer):
@@ -48,23 +47,25 @@ class BatchedDotLayer(MergeLayer):
         return T.batched_dot(inputs[0], inputs[1])
 
 class Model:
-    def __init__(self, train_file, test_file, batch_size=50, embedding_size=20):
+    def __init__(self, train_file, test_file, batch_size=1, embedding_size=20, max_norm=40, lr=0.01):
         self.train_lines, self.test_lines = self.get_lines(train_file), self.get_lines(test_file)
         lines = np.concatenate([np.array([{'type':'s', 'text':''}]), self.train_lines, self.test_lines], axis=0)
 
-        self.vectorizer = CountVectorizer(lowercase=False)
+        self.vectorizer = CountVectorizer(lowercase=False, binary=True)
         self.vectorizer.fit([x['text'] + ' ' + x['answer'] if 'answer' in x else x['text'] for x in lines])
 
         X = self.vectorizer.transform([x['text'] for x in lines]).toarray().astype(np.float32)
 
         self.data = { 'train': {}, 'test': {} }
         self.data['train']['C'], self.data['train']['Q'], self.data['train']['Y'], train_seqlen = self.get_dataset(self.train_lines, X[:len(self.train_lines)+1], offset=0)
-        self.data['test']['C'], self.data['test']['Q'], self.data['test']['Y'], test_seqlen = self.get_dataset(self.test_lines, X[len(self.test_lines)+1:], offset=len(self.train_lines)+1)
+        self.data['test']['C'], self.data['test']['Q'], self.data['test']['Y'], test_seqlen = self.get_dataset(self.test_lines, X[len(self.train_lines)+1:], offset=len(self.train_lines)+1)
         max_seqlen = max(train_seqlen, test_seqlen)
 
         self.batch_size = batch_size
         self.max_seqlen = max_seqlen
         self.num_classes = len(self.vectorizer.vocabulary_)
+        self.init_lr = lr
+        self.lr = self.init_lr
 
         c = T.imatrix()
         q = T.ivector()
@@ -80,7 +81,7 @@ class Model:
         l_C_vec.params[l_C_vec.W].remove('trainable')
 
         l_C_vec = lasagne.layers.ReshapeLayer(l_C_vec, shape=(batch_size * max_seqlen, X.shape[1]))
-        l_C_embedding = lasagne.layers.DenseLayer(l_C_vec, embedding_size, b=None, nonlinearity=None)
+        l_C_embedding = lasagne.layers.DenseLayer(l_C_vec, embedding_size, W=lasagne.init.Normal(), b=lasagne.init.Constant(0), nonlinearity=None)
         l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size, max_seqlen, embedding_size))
 
         l_Q_in = lasagne.layers.InputLayer(shape=(batch_size,))
@@ -90,25 +91,33 @@ class Model:
 
         l_Q_vec = lasagne.layers.ReshapeLayer(l_Q_vec, shape=(batch_size, 1 * X.shape[1]))
 
-        l_Q_embedding = lasagne.layers.DenseLayer(l_Q_vec, embedding_size, b=None, nonlinearity=None)
+        l_Q_embedding = lasagne.layers.DenseLayer(l_Q_vec, embedding_size, W=lasagne.init.Normal(), b=lasagne.init.Constant(0), nonlinearity=None)
 
         l_prob = InnerProductLayer((l_C_embedding, l_Q_embedding), nonlinearity=lasagne.nonlinearities.softmax)
 
         l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size * max_seqlen, embedding_size))
-        l_output = lasagne.layers.DenseLayer(l_C_embedding, embedding_size, b=None, nonlinearity=None)
+        l_output = lasagne.layers.DenseLayer(l_C_embedding, embedding_size, W=lasagne.init.Normal(), b=lasagne.init.Constant(0), nonlinearity=None)
         l_output = lasagne.layers.ReshapeLayer(l_output, shape=(batch_size, max_seqlen, embedding_size))
 
         l_weighted_output = BatchedDotLayer((l_prob, l_output))
 
         l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_Q_embedding))
-        l_pred = lasagne.layers.DenseLayer(l_sum, self.num_classes, nonlinearity=lasagne.nonlinearities.softmax)
+        l_pred = lasagne.layers.DenseLayer(l_sum, self.num_classes, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
 
         probas = lasagne.layers.helper.get_output(l_pred, { l_C_in: c, l_Q_in: q })
-        pred = T.argmax(probas, axis=1)
-        cost = T.nnet.binary_crossentropy(probas, y).mean()
+        probas = T.clip(probas, 1e-7, 1.0-1e-7)
 
-        params = lasagne.layers.helper.get_all_params(l_pred)
-        updates = lasagne.updates.adam(cost, params)
+        pred = T.argmax(probas, axis=1)
+
+        cost = T.nnet.binary_crossentropy(probas, y).sum()
+
+        params = lasagne.layers.helper.get_all_params(l_pred, trainable=True)
+
+        updates = lasagne.updates.sgd(cost, params, self.lr)
+        for param, update in updates.iteritems():
+            if param.ndim > 1:
+                updates[param] = lasagne.updates.norm_constraint(update, max_norm)
+
         givens = {
             c: self.c_shared,
             q: self.q_shared,
@@ -126,18 +135,26 @@ class Model:
         n_batches = len(dataset['Y']) // self.batch_size
         y_pred = np.concatenate([self.predict(dataset, i) for i in xrange(n_batches)])
         y_true = [self.vectorizer.vocabulary_[y] for y in dataset['Y'][:len(y_pred)]]
+        print metrics.confusion_matrix(y_true, y_pred)
+        print metrics.classification_report(y_true, y_pred)
         return metrics.f1_score(y_true, y_pred, average='weighted')
 
-    def train(self, n_epochs=10, shuffle_batch=False):
+    def train(self, n_epochs=100, shuffle_batch=False):
         epoch = 0
         n_train_batches = len(self.data['train']['Y']) // self.batch_size
         n_test_batches = len(self.data['test']['Y']) // self.batch_size
+        self.lr = self.init_lr
 
         while (epoch < n_epochs):
             epoch += 1
+
+            if epoch % 25 == 0:
+                self.lr /= 2.0
+
             indices = range(n_train_batches)
             if shuffle_batch:
                 indices = np.random.permutation(indices)
+
             total_cost = 0
             start_time = time.time()
             for minibatch_index in indices:
@@ -145,12 +162,12 @@ class Model:
                 total_cost += self.train_model()
             end_time = time.time()
             print "cost: ", (total_cost / len(indices)), " took: %d(s)" % (end_time - start_time)
+
             train_f1 = self.compute_f1(self.data['train'])
             print 'epoch %i, train_f1 %.2f' % (epoch, train_f1*100)
 
-        test_f1 = self.compute_f1(self.data['test'])
-        print 'test_f1: %.2f' % (test_f1*100)
-        return test_f1
+            test_f1 = self.compute_f1(self.data['test'])
+            print 'test_f1: %.2f' % (test_f1*100)
 
     def set_shared_variables(self, dataset, index):
         c = np.zeros((self.batch_size, self.max_seqlen), dtype=np.int32)
@@ -212,13 +229,13 @@ def main():
     print "args: ", args
     print "*" * 80
 
-    train_file = glob.glob('data/en-10k/qa%d_*train.txt' % args.task)[0]
-    test_file = glob.glob('data/en-10k/qa%d_*test.txt' % args.task)[0]
+    train_file = glob.glob('data/en/qa%d_*train.txt' % args.task)[0]
+    test_file = glob.glob('data/en/qa%d_*test.txt' % args.task)[0]
     if args.train_file != '' and args.test_file != '':
         train_file, test_file = args.train_file, args.test_file
 
     model = Model(train_file, test_file)
-    model.train()
+    model.train(n_epochs=100)
 
 if __name__ == '__main__':
     main()
