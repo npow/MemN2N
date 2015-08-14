@@ -102,7 +102,7 @@ class Model:
         l_weighted_output = BatchedDotLayer((l_prob, l_output))
 
         l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_Q_embedding))
-        l_pred = lasagne.layers.DenseLayer(l_sum, self.num_classes, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
+        l_pred = lasagne.layers.DenseLayer(l_sum, self.num_classes, W=lasagne.init.Normal(), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
 
         probas = lasagne.layers.helper.get_output(l_pred, { l_C_in: c, l_Q_in: q })
         probas = T.clip(probas, 1e-7, 1.0-1e-7)
