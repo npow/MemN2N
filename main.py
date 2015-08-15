@@ -104,35 +104,32 @@ class Model:
         cc = S_shared[c.flatten()].reshape((batch_size, max_seqlen, max_sentlen))
         qq = S_shared[q.flatten()].reshape((batch_size, max_sentlen))
 
-        l_C_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
-        l_C_in = lasagne.layers.ReshapeLayer(l_C_in, shape=(batch_size * max_seqlen * max_sentlen, ))
-        l_C_embedding = lasagne.layers.EmbeddingLayer(l_C_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        A = l_C_embedding.W
+        l_context_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
+        l_context_in = lasagne.layers.ReshapeLayer(l_context_in, shape=(batch_size * max_seqlen * max_sentlen, ))
+        l_A_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        A = l_A_embedding.W
+        l_A_embedding = lasagne.layers.ReshapeLayer(l_A_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
+        l_A_embedding = SumLayer(l_A_embedding, axis=2)
+
+        l_question_in = lasagne.layers.InputLayer(shape=(batch_size, max_sentlen))
+        l_question_in = lasagne.layers.ReshapeLayer(l_question_in, shape=(batch_size * max_sentlen, ))
+        l_B_embedding = lasagne.layers.EmbeddingLayer(l_question_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        B = l_B_embedding.W
+        l_B_embedding = lasagne.layers.ReshapeLayer(l_B_embedding, shape=(batch_size, max_sentlen, embedding_size))
+        l_B_embedding = SumLayer(l_B_embedding, axis=1)
+
+        l_C_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        C = l_C_embedding.W
         l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
         l_C_embedding = SumLayer(l_C_embedding, axis=2)
 
-        l_Q_in = lasagne.layers.InputLayer(shape=(batch_size, max_sentlen))
-        l_Q_in = lasagne.layers.ReshapeLayer(l_Q_in, shape=(batch_size * max_sentlen, ))
-        l_Q_embedding = lasagne.layers.EmbeddingLayer(l_Q_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        B = l_Q_embedding.W
-        l_Q_embedding = lasagne.layers.ReshapeLayer(l_Q_embedding, shape=(batch_size, max_sentlen, embedding_size))
-        l_Q_embedding = SumLayer(l_Q_embedding, axis=1)
+        l_prob = InnerProductLayer((l_A_embedding, l_B_embedding), nonlinearity=lasagne.nonlinearities.softmax)
+        l_weighted_output = BatchedDotLayer((l_prob, l_C_embedding))
 
-        l_prob = InnerProductLayer((l_C_embedding, l_Q_embedding), nonlinearity=lasagne.nonlinearities.softmax)
-
-        l_O_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
-        l_O_in = lasagne.layers.ReshapeLayer(l_O_in, shape=(batch_size * max_seqlen * max_sentlen, ))
-        l_O_embedding = lasagne.layers.EmbeddingLayer(l_O_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        C = l_O_embedding.W
-        l_O_embedding = lasagne.layers.ReshapeLayer(l_O_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
-        l_O_embedding = SumLayer(l_O_embedding, axis=2)
-
-        l_weighted_output = BatchedDotLayer((l_prob, l_O_embedding))
-
-        l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_Q_embedding))
+        l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_B_embedding))
         l_pred = lasagne.layers.DenseLayer(l_sum, self.num_classes, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
 
-        probas = lasagne.layers.helper.get_output(l_pred, { l_C_in: cc, l_Q_in: qq, l_O_in: cc })
+        probas = lasagne.layers.helper.get_output(l_pred, { l_context_in: cc, l_question_in: qq })
         probas = T.clip(probas, 1e-7, 1.0-1e-7)
 
         pred = T.argmax(probas, axis=1)
