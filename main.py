@@ -2,6 +2,7 @@ from __future__ import division
 import argparse
 import glob
 import lasagne
+import nltk
 import numpy as np
 import sys
 import theano
@@ -63,12 +64,16 @@ class Model:
         vocab, word_to_idx, max_seqlen, max_sentlen = self.get_vocab(lines)
 
         self.data = { 'train': {}, 'test': {} }
-        S_train, self.data['train']['C'], self.data['train']['Q'], self.data['train']['Y'] = self.process_dataset(train_lines, word_to_idx, max_sentlen)
-        S_test, self.data['test']['C'], self.data['test']['Q'], self.data['test']['Y'] = self.process_dataset(test_lines, word_to_idx, max_sentlen)
+        S_train, self.data['train']['C'], self.data['train']['Q'], self.data['train']['Y'] = self.process_dataset(train_lines, word_to_idx, max_sentlen, offset=0)
+        S_test, self.data['test']['C'], self.data['test']['Q'], self.data['test']['Y'] = self.process_dataset(test_lines, word_to_idx, max_sentlen, offset=len(S_train))
         S = np.concatenate([S_train, S_test], axis=0)
+        for i in range(10):
+            for k in ['C', 'Q', 'Y']:
+                print k, self.data['train'][k][i]
 
         print 'batch_size:', batch_size, 'max_seqlen:', max_seqlen, 'max_sentlen:', max_sentlen
         print 'sentences:', S.shape
+        print 'vocab:', vocab
         for d in ['train', 'test']:
             print d,
             for k in ['C', 'Q', 'Y']:
@@ -134,7 +139,7 @@ class Model:
         params = lasagne.layers.helper.get_all_params(l_pred, trainable=True)
         grads = T.grad(cost, params)
         scaled_grads = lasagne.updates.total_norm_constraint(grads, max_norm)
-        updates = lasagne.updates.adam(scaled_grads, params, learning_rate=self.lr)
+        updates = lasagne.updates.sgd(scaled_grads, params, learning_rate=self.lr)
 
         givens = {
             c: self.c_shared,
@@ -219,7 +224,7 @@ class Model:
         vocab = set()
         max_sentlen = 0
         for i,line in enumerate(lines):
-            words = line['text'].split()
+            words = nltk.word_tokenize(line['text'])
             max_sentlen = max(max_sentlen, len(words))
             for w in words:
                 vocab.add(w)
@@ -239,18 +244,18 @@ class Model:
 
         return vocab, word_to_idx, max_seqlen, max_sentlen
 
-    def process_dataset(self, lines, word_to_idx, max_sentlen):
+    def process_dataset(self, lines, word_to_idx, max_sentlen, offset):
         S, C, Q, Y = [], [], [], []
 
         for i,line in enumerate(lines):
-            word_indices = [word_to_idx[w] for w in line['text'].split()]
+            word_indices = [word_to_idx[w] for w in nltk.word_tokenize(line['text'])]
             word_indices += [0] * (max_sentlen - len(word_indices))
             S.append(word_indices)
             if line['type'] == 'q':
                 id = line['id']-1
-                indices = [idx for idx in range(i-id, i) if lines[idx]['type'] == 's']
+                indices = [offset+idx for idx in range(i-id, i) if lines[idx]['type'] == 's']
                 C.append(indices)
-                Q.append(i)
+                Q.append(offset+i)
                 Y.append(line['answer'])
         return np.array(S, dtype=np.int32), np.array(C), np.array(Q, dtype=np.int32), np.array(Y)
 
@@ -259,7 +264,7 @@ class Model:
         for i,line in enumerate(open(fname)):
             id = int(line[0:line.find(' ')])
             line = line.strip()
-            line = line[line.find(' ')+1:]        
+            line = line[line.find(' ')+1:]
             if line.find('?') == -1:
                 lines.append({'type':'s', 'text': line})
             else:
