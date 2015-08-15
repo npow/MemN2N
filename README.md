@@ -7,8 +7,8 @@ Below are the results obtained from the current implementation on [the set of to
     <thead>
         <tr>
             <th></th>
-            <th colspan="1">MemN2N (Sukhbaatar 2015)</th>
-            <th colspan="1">This Repo</th>
+            <th colspan="2">MemN2N (Sukhbaatar 2015)</th>
+            <th colspan="2">This Repo</th>
         </tr>
         <tr>
             <th>Task#</th>
@@ -19,48 +19,95 @@ Below are the results obtained from the current implementation on [the set of to
         </tr>
     </thead>
     <tbody>
-        <tr>
-            <td>1</td>
-            <td>0.6</td><td>37.6</td>
+        <tr><td>1</td>
+        
+            <td>0.6</td>
+            <td></td>
+            
+            <td>37.6</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>2</td>
-            <td>17.6</td><td>49.1</td>
+        <tr><td>2</td>
+        
+            <td>17.6</td>
+            <td></td>
+            
+            <td>49.1</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>3</td>
-            <td>71.0</td><td>77.8</td>
+        <tr><td>3</td>
+        
+            <td>71.0</td>
+            <td></td>
+            
+            <td>77.8</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>4</td>
-            <td>32.0</td><td>31.4</td>
+        <tr><td>4</td>
+        
+            <td>32.0</td>
+            <td></td>
+            
+            <td>31.4</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>5</td>
-            <td>18.3</td><td>23.5</td>
+        <tr><td>5</td>
+        
+            <td>18.3</td>
+            <td></td>
+            
+            <td>23.5</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>6</td>
-            <td>8.7</td><td>27.9</td>
+        <tr><td>6</td>
+        
+            <td>8.7</td>
+            <td></td>
+            
+            <td>27.9</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>7</td>
-            <td>23.5</td><td>N/A</td>
+        <tr><td>7</td>
+        
+            <td>23.5</td>
+            <td></td>
+            
+            <td>N/A</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>8</td>
-            <td>11.4</td><td>N/A</td>
+        <tr><td>8</td>
+            
+            <td>11.4</td>
+            <td></td>
+            
+            <td>N/A</td>
+            <td></td>
+            
         </tr>
-        <tr>
-            <td>9</td>
-            <td>21.1</td><td>19.5</td>
+        <tr><td>9</td>
+        
+            <td>21.1</td>
+            <td></td>
+            
+            <td>19.5</td>
+            <td></td>
+            
         </tr>
         <tr><td>10</td>
         
             <td>22.8</td>
+            <td></td>
             
             <td>26.1</td>
             <td></td>
+            
         </tr>
         <tr><td>11</td>
         
@@ -69,6 +116,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>30.1</td>
             <td></td>
+            
         </tr>
         <tr><td>12</td>
         
@@ -77,6 +125,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>52.2</td>
             <td></td>
+            
         </tr>
         <tr><td>13</td>
             
@@ -85,6 +134,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>46.0</td>
             <td></td>
+            
         </tr>
         <tr><td>14</td>
         
@@ -93,6 +143,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>21.8</td>
             <td></td>
+            
         </tr>
         <tr><td>15</td>
             
@@ -101,6 +152,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>0.0</td>
             <td></td>
+            
         </tr>
         <tr><td>16</td>
         
@@ -109,6 +161,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>55.5</td>
             <td></td>
+            
         </tr>
         <tr><td>17</td>
         
@@ -117,6 +170,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>49.1</td>
             <td></td>
+            
         </tr>
         <tr><td>18</td>
         
@@ -125,6 +179,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>55.7</td>
             <td></td>
+            
         </tr>
         <tr><td>19</td>
         
@@ -133,6 +188,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>81.4</td>
             <td></td>
+            
         </tr>
         <tr><td>20</td>
         
@@ -141,6 +197,7 @@ Below are the results obtained from the current implementation on [the set of to
             
             <td>0.0</td>
             <td></td>
+            
         </tr>        
     </tbody>
 </table>
