@@ -176,7 +176,7 @@ class Model:
 
             indices = range(n_train_batches)
             if shuffle_batch:
-                indices = np.random.permutation(indices)
+                self.shuffle_sync(self.data['train'])
 
             total_cost = 0
             start_time = time.time()
@@ -193,6 +193,11 @@ class Model:
 
             print 'TEST', '=' * 40
             test_f1 = self.compute_f1(self.data['test'])
+
+    def shuffle_sync(self, dataset):
+        p = np.random.permutation(len(dataset['Y']))
+        for k in ['C', 'Q', 'Y']:
+            dataset[k] = dataset[k][p]
 
     def set_shared_variables(self, dataset, index):
         c = np.zeros((self.batch_size, self.max_seqlen), dtype=np.int32)
