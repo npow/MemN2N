@@ -69,7 +69,7 @@ class Model:
         S = np.concatenate([S_train, S_test], axis=0)
         for i in range(10):
             for k in ['C', 'Q', 'Y']:
-                print k, self.data['train'][k][i]
+                print k, self.data['test'][k][i]
 
         print 'batch_size:', batch_size, 'max_seqlen:', max_seqlen, 'max_sentlen:', max_sentlen
         print 'sentences:', S.shape
@@ -106,14 +106,14 @@ class Model:
 
         l_C_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
         l_C_in = lasagne.layers.ReshapeLayer(l_C_in, shape=(batch_size * max_seqlen * max_sentlen, ))
-        l_C_embedding = lasagne.layers.EmbeddingLayer(l_C_in, len(vocab)+1, embedding_size)
+        l_C_embedding = lasagne.layers.EmbeddingLayer(l_C_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
         A = l_C_embedding.W
         l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
         l_C_embedding = SumLayer(l_C_embedding, axis=2)
 
         l_Q_in = lasagne.layers.InputLayer(shape=(batch_size, max_sentlen))
         l_Q_in = lasagne.layers.ReshapeLayer(l_Q_in, shape=(batch_size * max_sentlen, ))
-        l_Q_embedding = lasagne.layers.EmbeddingLayer(l_Q_in, len(vocab)+1, embedding_size)
+        l_Q_embedding = lasagne.layers.EmbeddingLayer(l_Q_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
         B = l_Q_embedding.W
         l_Q_embedding = lasagne.layers.ReshapeLayer(l_Q_embedding, shape=(batch_size, max_sentlen, embedding_size))
         l_Q_embedding = SumLayer(l_Q_embedding, axis=1)
@@ -289,8 +289,8 @@ def main():
     print 'args:', args
     print '*' * 80
 
-    train_file = glob.glob('data/en-10k/qa%d_*train.txt' % args.task)[0]
-    test_file = glob.glob('data/en-10k/qa%d_*test.txt' % args.task)[0]
+    train_file = glob.glob('data/en/qa%d_*train.txt' % args.task)[0]
+    test_file = glob.glob('data/en/qa%d_*test.txt' % args.task)[0]
     if args.train_file != '' and args.test_file != '':
         train_file, test_file = args.train_file, args.test_file
 
