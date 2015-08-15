@@ -57,8 +57,26 @@ class SumLayer(lasagne.layers.Layer):
     def get_output_for(self, input, **kwargs):
         return T.sum(input, axis=self.axis, dtype=theano.config.floatX)
 
+class TransposedDenseLayer(lasagne.layers.DenseLayer):
+    def __init__(self, incoming, num_units, W=lasagne.init.GlorotUniform(),
+                 b=lasagne.init.Constant(0.), nonlinearity=lasagne.nonlinearities.rectify,
+                 **kwargs):
+        super(TransposedDenseLayer, self).__init__(incoming, num_units, W, b, nonlinearity, **kwargs)
+
+    def get_output_shape_for(self, input_shape):
+        return (input_shape[0], self.num_units)
+
+    def get_output_for(self, input, **kwargs):
+        if input.ndim > 2:
+            input = input.flatten(2)
+
+        activation = T.dot(input, self.W.T)
+        if self.b is not None:
+            activation = activation + self.b.dimshuffle('x', 0)
+        return self.nonlinearity(activation)
+
 class MemoryNetworkLayer(lasagne.layers.MergeLayer):
-    def __init__(self, incomings, vocab, embedding_size, **kwargs):
+    def __init__(self, incomings, vocab, embedding_size, A=lasagne.init.Normal(std=0.1), C=lasagne.init.Normal(std=0.1), **kwargs):
         super(MemoryNetworkLayer, self).__init__(incomings, **kwargs)
         if len(incomings) != 2:
             raise NotImplementedError
@@ -69,13 +87,13 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         l_B_embedding = lasagne.layers.InputLayer(shape=(batch_size, embedding_size))
 
         l_context_in = lasagne.layers.ReshapeLayer(l_context_in, shape=(batch_size * max_seqlen * max_sentlen, ))
-        l_A_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        A = l_A_embedding.W
+        l_A_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=A)
+        self.A = l_A_embedding.W
         l_A_embedding = lasagne.layers.ReshapeLayer(l_A_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
         l_A_embedding = SumLayer(l_A_embedding, axis=2)
 
-        l_C_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        C = l_C_embedding.W
+        l_C_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=C)
+        self.C = l_C_embedding.W
         l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
         l_C_embedding = SumLayer(l_C_embedding, axis=2)
 
@@ -95,7 +113,7 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
 
         zero_vec_tensor = T.vector()
         self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
-        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [A, C]])
+        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [self.A, self.C]])
 
     def get_output_shape_for(self, input_shapes):
         return self.network.get_output_shape()
@@ -107,7 +125,7 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         self.set_zero(self.zero_vec)
 
 class Model:
-    def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3):
+    def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True):
         train_lines, test_lines = self.get_lines(train_file), self.get_lines(test_file)
         lines = np.concatenate([train_lines, test_lines], axis=0)
         vocab, word_to_idx, max_seqlen, max_sentlen = self.get_vocab(lines)
@@ -122,7 +140,7 @@ class Model:
 
         print 'batch_size:', batch_size, 'max_seqlen:', max_seqlen, 'max_sentlen:', max_sentlen
         print 'sentences:', S.shape
-        print 'vocab:', vocab
+        print 'vocab:', len(vocab), vocab
         for d in ['train', 'test']:
             print d,
             for k in ['C', 'Q', 'Y']:
@@ -136,7 +154,7 @@ class Model:
         self.batch_size = batch_size
         self.max_seqlen = max_seqlen
         self.max_sentlen = max_sentlen
-        self.num_classes = len(vocab)
+        self.num_classes = len(vocab) + 1
         self.vocab = vocab
         self.lb = lb
         self.init_lr = lr
@@ -156,17 +174,27 @@ class Model:
         l_context_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
         l_question_in = lasagne.layers.InputLayer(shape=(batch_size, max_sentlen))
 
+        A, C = lasagne.init.Normal(std=0.1).sample((len(vocab)+1, embedding_size)), lasagne.init.Normal(std=0.1)
+        W = A if adj_weight_tying else lasagne.init.Normal(std=0.1)
+
         l_question_in = lasagne.layers.ReshapeLayer(l_question_in, shape=(batch_size * max_sentlen, ))
-        l_B_embedding = lasagne.layers.EmbeddingLayer(l_question_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        l_B_embedding = lasagne.layers.EmbeddingLayer(l_question_in, len(vocab)+1, embedding_size, W=W)
         B = l_B_embedding.W
         l_B_embedding = lasagne.layers.ReshapeLayer(l_B_embedding, shape=(batch_size, max_sentlen, embedding_size))
         l_B_embedding = SumLayer(l_B_embedding, axis=1)
 
-        self.mem_layers = [MemoryNetworkLayer((l_context_in, l_B_embedding), vocab, embedding_size)]
+        self.mem_layers = [MemoryNetworkLayer((l_context_in, l_B_embedding), vocab, embedding_size, A=A, C=C)]
         for _ in range(1, num_hops):
-            self.mem_layers += [MemoryNetworkLayer((l_context_in, self.mem_layers[-1]), vocab, embedding_size)]
+            if adj_weight_tying:
+                A, C = self.mem_layers[-1].C, lasagne.init.Normal(std=0.1)
+            else: # RNN style
+                A, C = self.mem_layers[-1].A, self.mem_layers[-1].C
+            self.mem_layers += [MemoryNetworkLayer((l_context_in, self.mem_layers[-1]), vocab, embedding_size, A=A, C=C)]
 
-        l_pred = lasagne.layers.DenseLayer(self.mem_layers[-1], self.num_classes, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
+        if adj_weight_tying:
+            l_pred = TransposedDenseLayer(self.mem_layers[-1], self.num_classes, W=self.mem_layers[-1].C, b=None, nonlinearity=lasagne.nonlinearities.softmax)
+        else:
+            l_pred = lasagne.layers.DenseLayer(self.mem_layers[-1], self.num_classes, W=lasagne.init.Normal(std=0.1), b=None, nonlinearity=lasagne.nonlinearities.softmax)
 
         probas = lasagne.layers.helper.get_output(l_pred, { l_context_in: cc, l_question_in: qq })
         probas = T.clip(probas, 1e-7, 1.0-1e-7)
@@ -205,7 +233,7 @@ class Model:
 
     def compute_f1(self, dataset):
         n_batches = len(dataset['Y']) // self.batch_size
-        y_pred = np.concatenate([self.predict(dataset, i) for i in xrange(n_batches)])
+        y_pred = np.concatenate([self.predict(dataset, i) for i in xrange(n_batches)]).astype(np.int32) - 1
         y_true = [self.vocab.index(y) for y in dataset['Y'][:len(y_pred)]]
         print metrics.confusion_matrix(y_true, y_pred)
         print metrics.classification_report(y_true, y_pred)
@@ -258,7 +286,7 @@ class Model:
             row = row[:self.max_seqlen]
             c[i,:len(row)] = row
         q[:len(indices)] = dataset['Q'][indices]
-        y[:len(indices)] = self.lb.transform(dataset['Y'][indices])
+        y[:len(indices),1:self.num_classes] = self.lb.transform(dataset['Y'][indices])
 
         self.c_shared.set_value(c)
         self.q_shared.set_value(q)
