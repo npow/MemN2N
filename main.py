@@ -57,6 +57,61 @@ class SumLayer(lasagne.layers.Layer):
     def get_output_for(self, input, **kwargs):
         return T.sum(input, axis=self.axis, dtype=theano.config.floatX)
 
+class MemoryNetworkLayer(lasagne.layers.MergeLayer):
+    def __init__(self, incomings, vocab, embedding_size, **kwargs):
+        super(MemoryNetworkLayer, self).__init__(incomings, **kwargs)
+        if len(incomings) != 2:
+            raise NotImplementedError
+
+        batch_size, max_seqlen, max_sentlen = self.input_shapes[0]
+
+        l_context_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
+        l_question_in = lasagne.layers.InputLayer(shape=(batch_size, max_sentlen))
+
+        l_context_in = lasagne.layers.ReshapeLayer(l_context_in, shape=(batch_size * max_seqlen * max_sentlen, ))
+        l_A_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        A = l_A_embedding.W
+        l_A_embedding = lasagne.layers.ReshapeLayer(l_A_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
+        l_A_embedding = SumLayer(l_A_embedding, axis=2)
+
+        l_question_in = lasagne.layers.ReshapeLayer(l_question_in, shape=(batch_size * max_sentlen, ))
+        l_B_embedding = lasagne.layers.EmbeddingLayer(l_question_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        B = l_B_embedding.W
+        l_B_embedding = lasagne.layers.ReshapeLayer(l_B_embedding, shape=(batch_size, max_sentlen, embedding_size))
+        l_B_embedding = SumLayer(l_B_embedding, axis=1)
+
+        l_C_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        C = l_C_embedding.W
+        l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
+        l_C_embedding = SumLayer(l_C_embedding, axis=2)
+
+        l_prob = InnerProductLayer((l_A_embedding, l_B_embedding), nonlinearity=lasagne.nonlinearities.softmax)
+        l_weighted_output = BatchedDotLayer((l_prob, l_C_embedding))
+
+        l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_B_embedding))
+
+        self.l_context_in = l_context_in
+        self.l_question_in = l_question_in
+        self.network = l_sum
+
+        params = lasagne.layers.helper.get_all_params(self.network, trainable=True)
+        values = lasagne.layers.helper.get_all_param_values(self.network, trainable=True)
+        for p, v in zip(params, values):
+            self.add_param(p, v.shape, name=p.name)
+
+        zero_vec_tensor = T.vector()
+        self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
+        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [A, B, C]])
+
+    def get_output_shape_for(self, input_shapes):
+        return self.network.get_output_shape()
+
+    def get_output_for(self, inputs, **kwargs):
+        return lasagne.layers.helper.get_output(self.network, { self.l_context_in: inputs[0], self.l_question_in: inputs[1] })
+
+    def reset_zero(self):
+        self.set_zero(self.zero_vec)
+
 class Model:
     def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01):
         train_lines, test_lines = self.get_lines(train_file), self.get_lines(test_file)
@@ -105,29 +160,12 @@ class Model:
         qq = S_shared[q.flatten()].reshape((batch_size, max_sentlen))
 
         l_context_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
-        l_context_in = lasagne.layers.ReshapeLayer(l_context_in, shape=(batch_size * max_seqlen * max_sentlen, ))
-        l_A_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        A = l_A_embedding.W
-        l_A_embedding = lasagne.layers.ReshapeLayer(l_A_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
-        l_A_embedding = SumLayer(l_A_embedding, axis=2)
-
         l_question_in = lasagne.layers.InputLayer(shape=(batch_size, max_sentlen))
-        l_question_in = lasagne.layers.ReshapeLayer(l_question_in, shape=(batch_size * max_sentlen, ))
-        l_B_embedding = lasagne.layers.EmbeddingLayer(l_question_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        B = l_B_embedding.W
-        l_B_embedding = lasagne.layers.ReshapeLayer(l_B_embedding, shape=(batch_size, max_sentlen, embedding_size))
-        l_B_embedding = SumLayer(l_B_embedding, axis=1)
 
-        l_C_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
-        C = l_C_embedding.W
-        l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
-        l_C_embedding = SumLayer(l_C_embedding, axis=2)
+        l_mem1 = MemoryNetworkLayer((l_context_in, l_question_in), vocab, embedding_size)
+        self.mem_layers = [l_mem1]
 
-        l_prob = InnerProductLayer((l_A_embedding, l_B_embedding), nonlinearity=lasagne.nonlinearities.softmax)
-        l_weighted_output = BatchedDotLayer((l_prob, l_C_embedding))
-
-        l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_B_embedding))
-        l_pred = lasagne.layers.DenseLayer(l_sum, self.num_classes, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
+        l_pred = lasagne.layers.DenseLayer(l_mem1, self.num_classes, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
 
         probas = lasagne.layers.helper.get_output(l_pred, { l_context_in: cc, l_question_in: qq })
         probas = T.clip(probas, 1e-7, 1.0-1e-7)
@@ -137,6 +175,7 @@ class Model:
         cost = T.nnet.binary_crossentropy(probas, y).sum()
 
         params = lasagne.layers.helper.get_all_params(l_pred, trainable=True)
+        print 'params:', params
         grads = T.grad(cost, params)
         scaled_grads = lasagne.updates.total_norm_constraint(grads, max_norm)
         updates = lasagne.updates.sgd(scaled_grads, params, learning_rate=self.lr)
@@ -150,10 +189,9 @@ class Model:
         self.train_model = theano.function([], cost, givens=givens, updates=updates)
         self.compute_pred = theano.function([], pred, givens=givens, on_unused_input='ignore')
 
-        zero_vec_tensor = T.vector()
-        self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
-        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [A, B, C]])
-        self.set_zero(self.zero_vec)
+    def reset_zero(self):
+        for l in self.mem_layers:
+            l.reset_zero()
 
     def predict(self, dataset, index):
         self.set_shared_variables(dataset, index)
@@ -188,7 +226,7 @@ class Model:
             for minibatch_index in indices:
                 self.set_shared_variables(self.data['train'], minibatch_index)
                 total_cost += self.train_model()
-                self.set_zero(self.zero_vec)
+                self.reset_zero()
             end_time = time.time()
             print '\n' * 3, '*' * 80
             print 'epoch:', epoch, 'cost:', (total_cost / len(indices)), ' took: %d(s)' % (end_time - start_time)
