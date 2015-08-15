@@ -120,16 +120,19 @@ class Model:
 
         l_prob = InnerProductLayer((l_C_embedding, l_Q_embedding), nonlinearity=lasagne.nonlinearities.softmax)
 
-        l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size * max_seqlen, embedding_size))
-        l_output = lasagne.layers.DenseLayer(l_C_embedding, embedding_size, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=None)
-        l_output = lasagne.layers.ReshapeLayer(l_output, shape=(batch_size, max_seqlen, embedding_size))
+        l_O_in = lasagne.layers.InputLayer(shape=(batch_size, max_seqlen, max_sentlen))
+        l_O_in = lasagne.layers.ReshapeLayer(l_O_in, shape=(batch_size * max_seqlen * max_sentlen, ))
+        l_O_embedding = lasagne.layers.EmbeddingLayer(l_O_in, len(vocab)+1, embedding_size, W=lasagne.init.Normal(std=0.1))
+        C = l_O_embedding.W
+        l_O_embedding = lasagne.layers.ReshapeLayer(l_O_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
+        l_O_embedding = SumLayer(l_O_embedding, axis=2)
 
-        l_weighted_output = BatchedDotLayer((l_prob, l_output))
+        l_weighted_output = BatchedDotLayer((l_prob, l_O_embedding))
 
         l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_Q_embedding))
         l_pred = lasagne.layers.DenseLayer(l_sum, self.num_classes, W=lasagne.init.Normal(std=0.1), b=lasagne.init.Constant(0), nonlinearity=lasagne.nonlinearities.softmax)
 
-        probas = lasagne.layers.helper.get_output(l_pred, { l_C_in: cc, l_Q_in: qq })
+        probas = lasagne.layers.helper.get_output(l_pred, { l_C_in: cc, l_Q_in: qq, l_O_in: cc })
         probas = T.clip(probas, 1e-7, 1.0-1e-7)
 
         pred = T.argmax(probas, axis=1)
@@ -152,7 +155,7 @@ class Model:
 
         zero_vec_tensor = T.vector()
         self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
-        self.set_zero = theano.function([zero_vec_tensor], updates=[(A, T.set_subtensor(A[0,:], zero_vec_tensor)), (B, T.set_subtensor(B[0,:], zero_vec_tensor))])
+        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [A, B, C]])
         self.set_zero(self.zero_vec)
 
     def predict(self, dataset, index):
