@@ -159,6 +159,7 @@ class Model:
         self.lb = lb
         self.init_lr = lr
         self.lr = self.init_lr
+        self.questions = np.array([x for x in lines if x['type']=='q'])
 
         c = T.imatrix()
         q = T.ivector()
@@ -237,7 +238,7 @@ class Model:
         y_true = [self.vocab.index(y) for y in dataset['Y'][:len(y_pred)]]
         print metrics.confusion_matrix(y_true, y_pred)
         print metrics.classification_report(y_true, y_pred)
-        return metrics.f1_score(y_true, y_pred, average='weighted')
+        return metrics.f1_score(y_true, y_pred, average='weighted', pos_label=None)
 
     def train(self, n_epochs=100, shuffle_batch=False):
         epoch = 0
@@ -267,9 +268,11 @@ class Model:
 
             print 'TRAIN', '=' * 40
             train_f1 = self.compute_f1(self.data['train'])
+            print 'TRAIN ERROR:', 1-train_f1
 
             print 'TEST', '=' * 40
             test_f1 = self.compute_f1(self.data['test'])
+            print '*** TEST ERROR:', 1-test_f1
 
     def shuffle_sync(self, dataset):
         p = np.random.permutation(len(dataset['Y']))
@@ -326,6 +329,7 @@ class Model:
             if line['type'] == 'q':
                 id = line['id']-1
                 indices = [offset+idx for idx in range(i-id, i) if lines[idx]['type'] == 's']
+                line['refs'] = [indices.index(offset+i-id+ref) for ref in line['refs']]
                 C.append(indices)
                 Q.append(offset+i)
                 Y.append(line['answer'])
@@ -342,7 +346,7 @@ class Model:
             else:
                 idx = line.find('?')
                 tmp = line[idx+1:].split('\t')
-                lines.append({'id':id, 'type':'q', 'text': line[:idx], 'answer': tmp[1].strip(), 'refs': [int(x) for x in tmp[2:][0].split(' ')]})
+                lines.append({'id':id, 'type':'q', 'text': line[:idx], 'answer': tmp[1].strip(), 'refs': [int(x)-1 for x in tmp[2:][0].split(' ')]})
             if False and i > 1000:
                 break
         return np.array(lines)
