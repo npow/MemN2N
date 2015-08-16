@@ -125,7 +125,7 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         self.set_zero(self.zero_vec)
 
 class Model:
-    def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True):
+    def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True, **kwargs):
         train_lines, test_lines = self.get_lines(train_file), self.get_lines(test_file)
         lines = np.concatenate([train_lines, test_lines], axis=0)
         vocab, word_to_idx, max_seqlen, max_sentlen = self.get_vocab(lines)
@@ -360,17 +360,24 @@ def main():
     parser.add_argument('--task', type=int, default=1, help='Task#')
     parser.add_argument('--train_file', type=str, default='', help='Train file')
     parser.add_argument('--test_file', type=str, default='', help='Test file')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--embedding_size', type=int, default=20, help='Embedding size')
+    parser.add_argument('--max_norm', type=float, default=40.0, help='Max norm')
+    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
+    parser.add_argument('--num_hops', type=int, default=3, help='Num hops')
+    parser.add_argument('--adj_weight_tying', type='bool', default=True, help='Whether to use adjacent weight tying')
     args = parser.parse_args()
     print '*' * 80
     print 'args:', args
     print '*' * 80
 
-    train_file = glob.glob('data/en/qa%d_*train.txt' % args.task)[0]
-    test_file = glob.glob('data/en/qa%d_*test.txt' % args.task)[0]
     if args.train_file != '' and args.test_file != '':
         train_file, test_file = args.train_file, args.test_file
+    else:
+        args.train_file = glob.glob('data/en/qa%d_*train.txt' % args.task)[0]
+        args.test_file = glob.glob('data/en/qa%d_*test.txt' % args.task)[0]
 
-    model = Model(train_file, test_file)
+    model = Model(**args.__dict__)
     model.train(n_epochs=100, shuffle_batch=True)
 
 if __name__ == '__main__':
