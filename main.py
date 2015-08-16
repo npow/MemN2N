@@ -349,7 +349,7 @@ class Model:
         for i,line in enumerate(lines):
             if line['type'] == 'q':
                 id = line['id']-1
-                indices = [idx for idx in range(i-id, i) if lines[idx]['type'] == 's']
+                indices = [idx for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1][:50]
                 max_seqlen = max(len(indices), max_seqlen)
 
         return vocab, word_to_idx, idx_to_word, max_seqlen, max_sentlen
@@ -363,7 +363,7 @@ class Model:
             S.append(word_indices)
             if line['type'] == 'q':
                 id = line['id']-1
-                indices = [offset+idx for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1]
+                indices = [offset+idx for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1][:50]
                 line['refs'] = [indices.index(offset+i-id+ref) for ref in line['refs']]
                 C.append(indices)
                 Q.append(offset+i)
