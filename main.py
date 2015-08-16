@@ -366,6 +366,8 @@ def main():
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--num_hops', type=int, default=3, help='Num hops')
     parser.add_argument('--adj_weight_tying', type='bool', default=True, help='Whether to use adjacent weight tying')
+    parser.add_argument('--shuffle_batch', type='bool', default=True, help='Whether to shuffle minibatches')
+    parser.add_argument('--n_epochs', type=int, default=100, help='Num epochs')
     args = parser.parse_args()
     print '*' * 80
     print 'args:', args
@@ -378,7 +380,7 @@ def main():
         args.test_file = glob.glob('data/en/qa%d_*test.txt' % args.task)[0]
 
     model = Model(**args.__dict__)
-    model.train(n_epochs=100, shuffle_batch=True)
+    model.train(n_epochs=args.n_epochs, shuffle_batch=args.shuffle_batch)
 
 if __name__ == '__main__':
     main()
