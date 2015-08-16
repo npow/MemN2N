@@ -128,7 +128,7 @@ class Model:
     def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True, **kwargs):
         train_lines, test_lines = self.get_lines(train_file), self.get_lines(test_file)
         lines = np.concatenate([train_lines, test_lines], axis=0)
-        vocab, word_to_idx, max_seqlen, max_sentlen = self.get_vocab(lines)
+        vocab, word_to_idx, idx_to_word, max_seqlen, max_sentlen = self.get_vocab(lines)
 
         self.data = { 'train': {}, 'test': {} }
         S_train, self.data['train']['C'], self.data['train']['Q'], self.data['train']['Y'] = self.process_dataset(train_lines, word_to_idx, max_sentlen, offset=0)
@@ -137,7 +137,6 @@ class Model:
         for i in range(10):
             for k in ['C', 'Q', 'Y']:
                 print k, self.data['test'][k][i]
-
         print 'batch_size:', batch_size, 'max_seqlen:', max_seqlen, 'max_sentlen:', max_sentlen
         print 'sentences:', S.shape
         print 'vocab:', len(vocab), vocab
@@ -159,7 +158,8 @@ class Model:
         self.lb = lb
         self.init_lr = lr
         self.lr = self.init_lr
-        self.questions = np.array([x for x in lines if x['type']=='q'])
+        self.S = S
+        self.idx_to_word = idx_to_word
 
         c = T.imatrix()
         q = T.ivector()
@@ -238,7 +238,11 @@ class Model:
         y_true = [self.vocab.index(y) for y in dataset['Y'][:len(y_pred)]]
         print metrics.confusion_matrix(y_true, y_pred)
         print metrics.classification_report(y_true, y_pred)
-        return metrics.f1_score(y_true, y_pred, average='weighted', pos_label=None)
+        errors = []
+        for i,(t,p) in enumerate(zip(y_true,y_pred)):
+            if t != p:
+                errors.append((i,self.lb.classes_[p]))
+        return metrics.f1_score(y_true, y_pred, average='weighted', pos_label=None), errors
 
     def train(self, n_epochs=100, shuffle_batch=False):
         epoch = 0
@@ -267,12 +271,26 @@ class Model:
             print 'epoch:', epoch, 'cost:', (total_cost / len(indices)), ' took: %d(s)' % (end_time - start_time)
 
             print 'TRAIN', '=' * 40
-            train_f1 = self.compute_f1(self.data['train'])
+            train_f1, train_errors = self.compute_f1(self.data['train'])
+            for i,pred in train_errors[:10]:
+                print 'context: ', self.to_words(self.data['train']['C'][i])
+                print 'question: ', self.to_words([self.data['train']['Q'][i]])
+                print 'correct answer: ', self.data['train']['Y'][i]
+                print 'predicted answer: ', pred
+                print '---' * 20
+
             print 'TRAIN ERROR:', 1-train_f1
 
             print 'TEST', '=' * 40
-            test_f1 = self.compute_f1(self.data['test'])
+            test_f1, test_errors = self.compute_f1(self.data['test'])
             print '*** TEST ERROR:', 1-test_f1
+
+    def to_words(self, indices):
+        sents = []
+        for idx in indices:
+            words = ' '.join([self.idx_to_word[idx] for idx in self.S[idx] if idx > 0])
+            sents.append(words)
+        return ' '.join(sents)
 
     def shuffle_sync(self, dataset):
         p = np.random.permutation(len(dataset['Y']))
@@ -310,6 +328,10 @@ class Model:
         for w in vocab:
             word_to_idx[w] = len(word_to_idx) + 1
 
+        idx_to_word = {}
+        for w,idx in word_to_idx.iteritems():
+            idx_to_word[idx] = w
+
         max_seqlen = 0
         for i,line in enumerate(lines):
             if line['type'] == 'q':
@@ -317,7 +339,7 @@ class Model:
                 indices = [idx for idx in range(i-id, i) if lines[idx]['type'] == 's']
                 max_seqlen = max(len(indices), max_seqlen)
 
-        return vocab, word_to_idx, max_seqlen, max_sentlen
+        return vocab, word_to_idx, idx_to_word, max_seqlen, max_sentlen
 
     def process_dataset(self, lines, word_to_idx, max_sentlen, offset):
         S, C, Q, Y = [], [], [], []
