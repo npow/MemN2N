@@ -57,13 +57,16 @@ class SumLayer(lasagne.layers.Layer):
     def get_output_for(self, input, **kwargs):
         return T.sum(input, axis=self.axis)
 
-class TemporalSumLayer(SumLayer):
-    def __init__(self, incoming, axis, T=lasagne.init.Normal(std=0.1), **kwargs):
-        super(TemporalSumLayer, self).__init__(incoming, axis, **kwargs)
-        self.T = self.add_param(T, (self.input_shape[axis-1], self.input_shape[axis+1]), name="T")
+class TemporalEncodingLayer(lasagne.layers.Layer):
+    def __init__(self, incoming, T=lasagne.init.Normal(std=0.1), **kwargs):
+        super(TemporalEncodingLayer, self).__init__(incoming, **kwargs)
+        self.T = self.add_param(T, self.input_shape[-2:], name="T")
+
+    def get_output_shape_for(self, input_shape):
+        return input_shape
 
     def get_output_for(self, input, **kwargs):
-        return T.sum(input, axis=self.axis) + self.T
+        return input + self.T
 
 class TransposedDenseLayer(lasagne.layers.DenseLayer):
     def __init__(self, incoming, num_units, W=lasagne.init.GlorotUniform(),
@@ -98,13 +101,15 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         l_A_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=A)
         self.A = l_A_embedding.W
         l_A_embedding = lasagne.layers.ReshapeLayer(l_A_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
-        l_A_embedding = TemporalSumLayer(l_A_embedding, axis=2, T=A_T)
+        l_A_embedding = SumLayer(l_A_embedding, axis=2)
+        l_A_embedding = TemporalEncodingLayer(l_A_embedding, T=A_T)
         self.A_T = l_A_embedding.T
 
         l_C_embedding = lasagne.layers.EmbeddingLayer(l_context_in, len(vocab)+1, embedding_size, W=C)
         self.C = l_C_embedding.W
         l_C_embedding = lasagne.layers.ReshapeLayer(l_C_embedding, shape=(batch_size, max_seqlen, max_sentlen, embedding_size))
-        l_C_embedding = TemporalSumLayer(l_C_embedding, axis=2, T=C_T)
+        l_C_embedding = SumLayer(l_C_embedding, axis=2)
+        l_C_embedding = TemporalEncodingLayer(l_C_embedding, T=C_T)
         self.C_T = l_C_embedding.T
 
         l_prob = InnerProductLayer((l_A_embedding, l_B_embedding), nonlinearity=lasagne.nonlinearities.softmax)
