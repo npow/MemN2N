@@ -82,7 +82,7 @@ class PositionEncodingLayer(lasagne.layers.MergeLayer):
         js = T.tile(T.arange(max_sentlen), [batch_size * max_seqlen]).reshape((batch_size, max_seqlen, max_sentlen)) + 1
         A = T.shape_padright(1 - js / sentlens, 1)
         B = T.shape_padright(1 - 2*js / sentlens, 1)
-        C = T.arange(embedding_size).reshape((1,-1)) / embedding_size
+        C = (T.arange(embedding_size).reshape((1,-1)) + 1) / embedding_size
 
         return inputs[0] * (A - B.dot(C))
 
@@ -105,7 +105,7 @@ class TransposedDenseLayer(lasagne.layers.DenseLayer):
         return self.nonlinearity(activation)
 
 class MemoryNetworkLayer(lasagne.layers.MergeLayer):
-    def __init__(self, incomings, vocab, embedding_size, A, A_T, C, C_T, **kwargs):
+    def __init__(self, incomings, vocab, embedding_size, A, A_T, C, C_T, nonlinearity=lasagne.nonlinearities.softmax, **kwargs):
         super(MemoryNetworkLayer, self).__init__(incomings, **kwargs)
         if len(incomings) != 3:
             raise NotImplementedError
@@ -133,7 +133,7 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         l_C_embedding = TemporalEncodingLayer(l_C_embedding, T=C_T)
         self.C_T = l_C_embedding.T
 
-        l_prob = InnerProductLayer((l_A_embedding, l_B_embedding), nonlinearity=lasagne.nonlinearities.softmax)
+        l_prob = InnerProductLayer((l_A_embedding, l_B_embedding), nonlinearity=nonlinearity)
         l_weighted_output = BatchedDotLayer((l_prob, l_C_embedding))
 
         l_sum = lasagne.layers.ElemwiseSumLayer((l_weighted_output, l_B_embedding))
@@ -162,7 +162,7 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         self.set_zero(self.zero_vec)
 
 class Model:
-    def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True, **kwargs):
+    def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True, linear_start=True, **kwargs):
         train_lines, test_lines = self.get_lines(train_file), self.get_lines(test_file)
         lines = np.concatenate([train_lines, test_lines], axis=0)
         vocab, word_to_idx, idx_to_word, max_seqlen, max_sentlen = self.get_vocab(lines)
@@ -190,13 +190,23 @@ class Model:
         self.batch_size = batch_size
         self.max_seqlen = max_seqlen
         self.max_sentlen = max_sentlen
+        self.embedding_size = embedding_size
         self.num_classes = len(vocab) + 1
         self.vocab = vocab
+        self.adj_weight_tying = adj_weight_tying
+        self.num_hops = num_hops
         self.lb = lb
         self.init_lr = lr
         self.lr = self.init_lr
+        self.max_norm = max_norm
         self.S = S
         self.idx_to_word = idx_to_word
+        self.nonlinearity = None if linear_start else lasagne.nonlinearities.softmax
+
+        self.build_network(self.nonlinearity)
+
+    def build_network(self, nonlinearity):
+        batch_size, max_seqlen, max_sentlen, embedding_size, vocab = self.batch_size, self.max_seqlen, self.max_sentlen, self.embedding_size, self.vocab
 
         c = T.imatrix()
         q = T.ivector()
@@ -208,7 +218,7 @@ class Model:
         self.a_shared = theano.shared(np.zeros((batch_size, self.num_classes), dtype=np.int32), borrow=True)
         self.c_len_shared = theano.shared(np.zeros((batch_size, max_seqlen), dtype=np.int32), borrow=True)
         self.q_len_shared = theano.shared(np.zeros((batch_size, 1), dtype=np.int32), borrow=True)
-        S_shared = theano.shared(S, borrow=True)
+        S_shared = theano.shared(self.S, borrow=True)
 
         cc = S_shared[c.flatten()].reshape((batch_size, max_seqlen, max_sentlen))
         qq = S_shared[q.flatten()].reshape((batch_size, max_sentlen))
@@ -221,7 +231,7 @@ class Model:
 
         A, C = lasagne.init.Normal(std=0.1).sample((len(vocab)+1, embedding_size)), lasagne.init.Normal(std=0.1)
         A_T, C_T = lasagne.init.Normal(std=0.1), lasagne.init.Normal(std=0.1)
-        W = A if adj_weight_tying else lasagne.init.Normal(std=0.1)
+        W = A if self.adj_weight_tying else lasagne.init.Normal(std=0.1)
 
         l_question_in = lasagne.layers.ReshapeLayer(l_question_in, shape=(batch_size * max_sentlen, ))
         l_B_embedding = lasagne.layers.EmbeddingLayer(l_question_in, len(vocab)+1, embedding_size, W=W)
@@ -231,17 +241,17 @@ class Model:
         l_B_embedding = lasagne.layers.ReshapeLayer(l_B_embedding, shape=(batch_size, max_sentlen, embedding_size))
         l_B_embedding = SumLayer(l_B_embedding, axis=1)
 
-        self.mem_layers = [MemoryNetworkLayer((l_context_in, l_B_embedding, l_context_len_in), vocab, embedding_size, A=A, A_T=A_T, C=C, C_T=C_T)]
-        for _ in range(1, num_hops):
-            if adj_weight_tying:
+        self.mem_layers = [MemoryNetworkLayer((l_context_in, l_B_embedding, l_context_len_in), vocab, embedding_size, A=A, A_T=A_T, C=C, C_T=C_T, nonlinearity=nonlinearity)]
+        for _ in range(1, self.num_hops):
+            if self.adj_weight_tying:
                 A, C = self.mem_layers[-1].C, lasagne.init.Normal(std=0.1)
                 A_T, C_T = self.mem_layers[-1].C_T, lasagne.init.Normal(std=0.1)
             else: # RNN style
                 A, C = self.mem_layers[-1].A, self.mem_layers[-1].C
                 A_T, C_T = self.mem_layers[-1].A_T, self.mem_layers[-1].C_T
-            self.mem_layers += [MemoryNetworkLayer((l_context_in, self.mem_layers[-1], l_context_len_in), vocab, embedding_size, A=A, A_T=A_T, C=C, C_T=C_T)]
+            self.mem_layers += [MemoryNetworkLayer((l_context_in, self.mem_layers[-1], l_context_len_in), vocab, embedding_size, A=A, A_T=A_T, C=C, C_T=C_T, nonlinearity=nonlinearity)]
 
-        if adj_weight_tying:
+        if self.adj_weight_tying:
             l_pred = TransposedDenseLayer(self.mem_layers[-1], self.num_classes, W=self.mem_layers[-1].C, b=None, nonlinearity=lasagne.nonlinearities.softmax)
         else:
             l_pred = lasagne.layers.DenseLayer(self.mem_layers[-1], self.num_classes, W=lasagne.init.Normal(std=0.1), b=None, nonlinearity=lasagne.nonlinearities.softmax)
@@ -256,7 +266,7 @@ class Model:
         params = lasagne.layers.helper.get_all_params(l_pred, trainable=True)
         print 'params:', params
         grads = T.grad(cost, params)
-        scaled_grads = lasagne.updates.total_norm_constraint(grads, max_norm)
+        scaled_grads = lasagne.updates.total_norm_constraint(grads, self.max_norm)
         updates = lasagne.updates.sgd(scaled_grads, params, learning_rate=self.lr)
 
         givens = {
@@ -273,6 +283,9 @@ class Model:
         zero_vec_tensor = T.vector()
         self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
         self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [B]])
+
+        self.nonlinearity = nonlinearity
+        self.network = l_pred
 
     def reset_zero(self):
         self.set_zero(self.zero_vec)
@@ -300,6 +313,7 @@ class Model:
         n_train_batches = len(self.data['train']['Y']) // self.batch_size
         n_test_batches = len(self.data['test']['Y']) // self.batch_size
         self.lr = self.init_lr
+        prev_train_f1 = None
 
         while (epoch < n_epochs):
             epoch += 1
@@ -330,6 +344,13 @@ class Model:
                     print 'correct answer: ', self.data['train']['Y'][i]
                     print 'predicted answer: ', pred
                     print '---' * 20
+
+            if prev_train_f1 is not None and train_f1 < prev_train_f1 and self.nonlinearity is None:
+                prev_weights = lasagne.layers.helper.get_all_param_values(self.network)
+                self.build_network(nonlinearity=lasagne.nonlinearities.softmax)
+                lasagne.layers.helper.set_all_param_values(self.network, prev_weights)
+
+            prev_train_f1 = train_f1
 
             print 'TRAIN ERROR:', 1-train_f1
 
@@ -450,6 +471,7 @@ def main():
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--num_hops', type=int, default=3, help='Num hops')
     parser.add_argument('--adj_weight_tying', type='bool', default=True, help='Whether to use adjacent weight tying')
+    parser.add_argument('--linear_start', type='bool', default=False, help='Whether to start with linear activations')
     parser.add_argument('--shuffle_batch', type='bool', default=True, help='Whether to shuffle minibatches')
     parser.add_argument('--n_epochs', type=int, default=100, help='Num epochs')
     args = parser.parse_args()
