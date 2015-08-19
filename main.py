@@ -352,11 +352,11 @@ class Model:
 
             prev_train_f1 = train_f1
 
-            print 'TRAIN ERROR:', 1-train_f1
+            print 'TRAIN_ERROR:', (1-train_f1)*100
 
             print 'TEST', '=' * 40
             test_f1, test_errors = self.compute_f1(self.data['test'])
-            print '*** TEST ERROR:', 1-test_f1
+            print '*** TEST_ERROR:', (1-test_f1)*100
 
     def to_words(self, indices):
         sents = []
