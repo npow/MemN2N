@@ -9,14 +9,15 @@ import theano
 import theano.tensor as T
 import time
 from sklearn import metrics
-from sklearn.feature_extraction.text import *
-from sklearn.preprocessing import *
+from sklearn.preprocessing import LabelBinarizer
 from theano.printing import Print as pp
 
 import warnings
 warnings.filterwarnings('ignore', '.*topo.*')
 
+
 class InnerProductLayer(lasagne.layers.MergeLayer):
+
     def __init__(self, incomings, nonlinearity=None, **kwargs):
         super(InnerProductLayer, self).__init__(incomings, **kwargs)
         self.nonlinearity = nonlinearity
@@ -34,7 +35,9 @@ class InnerProductLayer(lasagne.layers.MergeLayer):
             output = self.nonlinearity(output)
         return output
 
+
 class BatchedDotLayer(lasagne.layers.MergeLayer):
+
     def __init__(self, incomings, **kwargs):
         super(BatchedDotLayer, self).__init__(incomings, **kwargs)
         if len(incomings) != 2:
@@ -46,7 +49,9 @@ class BatchedDotLayer(lasagne.layers.MergeLayer):
     def get_output_for(self, inputs, **kwargs):
         return T.batched_dot(inputs[0], inputs[1])
 
+
 class SumLayer(lasagne.layers.Layer):
+
     def __init__(self, incoming, axis, **kwargs):
         super(SumLayer, self).__init__(incoming, **kwargs)
         self.axis = axis
@@ -57,7 +62,9 @@ class SumLayer(lasagne.layers.Layer):
     def get_output_for(self, input, **kwargs):
         return T.sum(input, axis=self.axis)
 
+
 class TemporalEncodingLayer(lasagne.layers.Layer):
+
     def __init__(self, incoming, T=lasagne.init.Normal(std=0.1), **kwargs):
         super(TemporalEncodingLayer, self).__init__(incoming, **kwargs)
         self.T = self.add_param(T, self.input_shape[-2:], name="T")
@@ -68,7 +75,9 @@ class TemporalEncodingLayer(lasagne.layers.Layer):
     def get_output_for(self, input, **kwargs):
         return input + self.T
 
+
 class TransposedDenseLayer(lasagne.layers.DenseLayer):
+
     def __init__(self, incoming, num_units, W=lasagne.init.GlorotUniform(),
                  b=lasagne.init.Constant(0.), nonlinearity=lasagne.nonlinearities.rectify,
                  **kwargs):
@@ -86,7 +95,9 @@ class TransposedDenseLayer(lasagne.layers.DenseLayer):
             activation = activation + self.b.dimshuffle('x', 0)
         return self.nonlinearity(activation)
 
+
 class MemoryNetworkLayer(lasagne.layers.MergeLayer):
+
     def __init__(self, incomings, vocab, embedding_size, A, A_T, C, C_T, nonlinearity=lasagne.nonlinearities.softmax, **kwargs):
         super(MemoryNetworkLayer, self).__init__(incomings, **kwargs)
         if len(incomings) != 3:
@@ -132,24 +143,26 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
 
         zero_vec_tensor = T.vector()
         self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
-        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [self.A, self.C]])
+        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0, :], zero_vec_tensor)) for x in [self.A, self.C]])
 
     def get_output_shape_for(self, input_shapes):
         return self.network.get_output_shape()
 
     def get_output_for(self, inputs, **kwargs):
-        return lasagne.layers.helper.get_output(self.network, { self.l_context_in: inputs[0], self.l_B_embedding: inputs[1], self.l_context_pe_in: inputs[2] })
+        return lasagne.layers.helper.get_output(self.network, {self.l_context_in: inputs[0], self.l_B_embedding: inputs[1], self.l_context_pe_in: inputs[2]})
 
     def reset_zero(self):
         self.set_zero(self.zero_vec)
 
+
 class Model:
+
     def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True, linear_start=True, **kwargs):
         train_lines, test_lines = self.get_lines(train_file), self.get_lines(test_file)
         lines = np.concatenate([train_lines, test_lines], axis=0)
         vocab, word_to_idx, idx_to_word, max_seqlen, max_sentlen = self.get_vocab(lines)
 
-        self.data = { 'train': {}, 'test': {} }
+        self.data = {'train': {}, 'test': {}}
         S_train, self.data['train']['C'], self.data['train']['Q'], self.data['train']['Y'] = self.process_dataset(train_lines, word_to_idx, max_sentlen, offset=0)
         S_test, self.data['test']['C'], self.data['test']['Q'], self.data['test']['Y'] = self.process_dataset(test_lines, word_to_idx, max_sentlen, offset=len(S_train))
         S = np.concatenate([S_train, S_test], axis=0)
@@ -228,7 +241,7 @@ class Model:
             if self.adj_weight_tying:
                 A, C = self.mem_layers[-1].C, lasagne.init.Normal(std=0.1)
                 A_T, C_T = self.mem_layers[-1].C_T, lasagne.init.Normal(std=0.1)
-            else: # RNN style
+            else:  # RNN style
                 A, C = self.mem_layers[-1].A, self.mem_layers[-1].C
                 A_T, C_T = self.mem_layers[-1].A_T, self.mem_layers[-1].C_T
             self.mem_layers += [MemoryNetworkLayer((l_context_in, self.mem_layers[-1], l_context_pe_in), vocab, embedding_size, A=A, A_T=A_T, C=C, C_T=C_T, nonlinearity=nonlinearity)]
@@ -238,7 +251,7 @@ class Model:
         else:
             l_pred = lasagne.layers.DenseLayer(self.mem_layers[-1], self.num_classes, W=lasagne.init.Normal(std=0.1), b=None, nonlinearity=lasagne.nonlinearities.softmax)
 
-        probas = lasagne.layers.helper.get_output(l_pred, { l_context_in: cc, l_question_in: qq, l_context_pe_in: c_pe, l_question_pe_in: q_pe })
+        probas = lasagne.layers.helper.get_output(l_pred, {l_context_in: cc, l_question_in: qq, l_context_pe_in: c_pe, l_question_pe_in: q_pe})
         probas = T.clip(probas, 1e-7, 1.0-1e-7)
 
         pred = T.argmax(probas, axis=1)
@@ -264,7 +277,7 @@ class Model:
 
         zero_vec_tensor = T.vector()
         self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
-        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0,:], zero_vec_tensor)) for x in [B]])
+        self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0, :], zero_vec_tensor)) for x in [B]])
 
         self.nonlinearity = nonlinearity
         self.network = l_pred
@@ -285,15 +298,14 @@ class Model:
         print metrics.confusion_matrix(y_true, y_pred)
         print metrics.classification_report(y_true, y_pred)
         errors = []
-        for i,(t,p) in enumerate(zip(y_true,y_pred)):
+        for i, (t, p) in enumerate(zip(y_true, y_pred)):
             if t != p:
-                errors.append((i,self.lb.classes_[p]))
+                errors.append((i, self.lb.classes_[p]))
         return metrics.f1_score(y_true, y_pred, average='weighted', pos_label=None), errors
 
     def train(self, n_epochs=100, shuffle_batch=False):
         epoch = 0
         n_train_batches = len(self.data['train']['Y']) // self.batch_size
-        n_test_batches = len(self.data['test']['Y']) // self.batch_size
         self.lr = self.init_lr
         prev_train_f1 = None
 
@@ -320,7 +332,7 @@ class Model:
             print 'TRAIN', '=' * 40
             train_f1, train_errors = self.compute_f1(self.data['train'])
             if False:
-                for i,pred in train_errors[:10]:
+                for i, pred in train_errors[:10]:
                     print 'context: ', self.to_words(self.data['train']['C'][i])
                     print 'question: ', self.to_words([self.data['train']['Q'][i]])
                     print 'correct answer: ', self.data['train']['Y'][i]
@@ -360,21 +372,21 @@ class Model:
         q_pe = np.zeros((self.batch_size, 1, self.max_sentlen, self.embedding_size), dtype=theano.config.floatX)
 
         indices = range(index*self.batch_size, (index+1)*self.batch_size)
-        for i,row in enumerate(dataset['C'][indices]):
+        for i, row in enumerate(dataset['C'][indices]):
             row = row[:self.max_seqlen]
-            c[i,:len(row)] = row
+            c[i, :len(row)] = row
 
         q[:len(indices)] = dataset['Q'][indices]
 
         for key, mask in [('C', c_pe), ('Q', q_pe)]:
-            for i,row in enumerate(dataset[key][indices]):
+            for i, row in enumerate(dataset[key][indices]):
                 sentences = self.S[row].reshape((-1, self.max_sentlen))
-                for ii,word_idxs in enumerate(sentences):
+                for ii, word_idxs in enumerate(sentences):
                     J = np.count_nonzero(word_idxs)
                     for j in np.arange(J):
-                        mask[i,ii,j,:] = (1 - (j+1)/J) - ((np.arange(self.embedding_size)+1)/self.embedding_size)*(1 - 2*(j+1)/J)
+                        mask[i, ii, j, :] = (1 - (j+1)/J) - ((np.arange(self.embedding_size)+1)/self.embedding_size)*(1 - 2*(j+1)/J)
 
-        y[:len(indices),1:self.num_classes] = self.lb.transform(dataset['Y'][indices])
+        y[:len(indices), 1:self.num_classes] = self.lb.transform(dataset['Y'][indices])
 
         self.c_shared.set_value(c)
         self.q_shared.set_value(q)
@@ -385,7 +397,7 @@ class Model:
     def get_vocab(self, lines):
         vocab = set()
         max_sentlen = 0
-        for i,line in enumerate(lines):
+        for i, line in enumerate(lines):
             words = nltk.word_tokenize(line['text'])
             max_sentlen = max(max_sentlen, len(words))
             for w in words:
@@ -398,11 +410,11 @@ class Model:
             word_to_idx[w] = len(word_to_idx) + 1
 
         idx_to_word = {}
-        for w,idx in word_to_idx.iteritems():
+        for w, idx in word_to_idx.iteritems():
             idx_to_word[idx] = w
 
         max_seqlen = 0
-        for i,line in enumerate(lines):
+        for i, line in enumerate(lines):
             if line['type'] == 'q':
                 id = line['id']-1
                 indices = [idx for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1][:50]
@@ -413,7 +425,7 @@ class Model:
     def process_dataset(self, lines, word_to_idx, max_sentlen, offset):
         S, C, Q, Y = [], [], [], []
 
-        for i,line in enumerate(lines):
+        for i, line in enumerate(lines):
             word_indices = [word_to_idx[w] for w in nltk.word_tokenize(line['text'])]
             word_indices += [0] * (max_sentlen - len(word_indices))
             S.append(word_indices)
@@ -428,26 +440,28 @@ class Model:
 
     def get_lines(self, fname):
         lines = []
-        for i,line in enumerate(open(fname)):
+        for i, line in enumerate(open(fname)):
             id = int(line[0:line.find(' ')])
             line = line.strip()
             line = line[line.find(' ')+1:]
             if line.find('?') == -1:
-                lines.append({'type':'s', 'text': line})
+                lines.append({'type': 's', 'text': line})
             else:
                 idx = line.find('?')
                 tmp = line[idx+1:].split('\t')
-                lines.append({'id':id, 'type':'q', 'text': line[:idx], 'answer': tmp[1].strip(), 'refs': [int(x)-1 for x in tmp[2:][0].split(' ')]})
+                lines.append({'id': id, 'type': 'q', 'text': line[:idx], 'answer': tmp[1].strip(), 'refs': [int(x)-1 for x in tmp[2:][0].split(' ')]})
             if False and i > 1000:
                 break
         return np.array(lines)
 
+
 def str2bool(v):
-  return v.lower() in ('yes', 'true', 't', '1')
+    return v.lower() in ('yes', 'true', 't', '1')
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.register('type','bool',str2bool)
+    parser.register('type', 'bool', str2bool)
     parser.add_argument('--task', type=int, default=1, help='Task#')
     parser.add_argument('--train_file', type=str, default='', help='Train file')
     parser.add_argument('--test_file', type=str, default='', help='Test file')
@@ -465,9 +479,7 @@ def main():
     print 'args:', args
     print '*' * 80
 
-    if args.train_file != '' and args.test_file != '':
-        train_file, test_file = args.train_file, args.test_file
-    else:
+    if args.train_file == '' or args.test_file == '':
         args.train_file = glob.glob('data/en/qa%d_*train.txt' % args.task)[0]
         args.test_file = glob.glob('data/en/qa%d_*test.txt' % args.task)[0]
 
