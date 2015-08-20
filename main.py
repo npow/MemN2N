@@ -332,6 +332,7 @@ class Model:
 
             print 'TRAIN', '=' * 40
             train_f1, train_errors = self.compute_f1(self.data['train'])
+            print 'TRAIN_ERROR:', (1-train_f1)*100
             if False:
                 for i, pred in train_errors[:10]:
                     print 'context: ', self.to_words(self.data['train']['C'][i])
@@ -352,7 +353,6 @@ class Model:
                 print '*** TEST_ERROR:', (1-test_f1)*100
 
             prev_train_f1 = train_f1
-            print 'TRAIN_ERROR:', (1-train_f1)*100
 
     def to_words(self, indices):
         sents = []
