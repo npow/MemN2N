@@ -165,7 +165,7 @@ class Model:
         self.data = {'train': {}, 'test': {}}
         S_train, self.data['train']['C'], self.data['train']['Q'], self.data['train']['Y'] = self.process_dataset(train_lines, word_to_idx, max_sentlen, offset=0)
         S_test, self.data['test']['C'], self.data['test']['Q'], self.data['test']['Y'] = self.process_dataset(test_lines, word_to_idx, max_sentlen, offset=len(S_train))
-        S = np.concatenate([S_train, S_test], axis=0)
+        S = np.concatenate([np.zeros((1, max_sentlen), dtype=np.int32), S_train, S_test], axis=0)
         for i in range(10):
             for k in ['C', 'Q', 'Y']:
                 print k, self.data['test'][k][i]
@@ -430,10 +430,10 @@ class Model:
             S.append(word_indices)
             if line['type'] == 'q':
                 id = line['id']-1
-                indices = [offset+idx for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1][:50]
-                line['refs'] = [indices.index(offset+i-id+ref) for ref in line['refs']]
+                indices = [offset+idx+1 for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1][:50]
+                line['refs'] = [indices.index(offset+i+1-id+ref) for ref in line['refs']]
                 C.append(indices)
-                Q.append(offset+i)
+                Q.append(offset+i+1)
                 Y.append(line['answer'])
         return np.array(S, dtype=np.int32), np.array(C), np.array(Q, dtype=np.int32), np.array(Y)
 
