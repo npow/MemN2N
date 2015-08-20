@@ -308,7 +308,6 @@ class Model:
         n_train_batches = len(self.data['train']['Y']) // self.batch_size
         self.lr = self.init_lr
         prev_train_f1 = None
-        prev_test_f1 = None
 
         while (epoch < n_epochs):
             epoch += 1
@@ -348,8 +347,6 @@ class Model:
             else:
                 print 'TEST', '=' * 40
                 test_f1, test_errors = self.compute_f1(self.data['test'])
-                if prev_test_f1 is not None and test_f1 < prev_test_f1:
-                    break
                 print '*** TEST_ERROR:', (1-test_f1)*100
 
             prev_train_f1 = train_f1
