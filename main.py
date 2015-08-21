@@ -105,19 +105,14 @@ class RecurrentEncodingLayer(lasagne.layers.MergeLayer):
 
         self.embedding_size = self.input_shapes[0][-1]
         l_in = lasagne.layers.InputLayer(shape=self.input_shapes[0])
-        l_recurrent = lasagne.layers.RecurrentLayer(l_in,
-                                                    self.embedding_size,
-                                                    W_in_to_hid=W_in_to_hid,
-                                                    W_hid_to_hid=W_hid_to_hid,
-                                                    b=None,
-                                                    nonlinearity=lasagne.nonlinearities.tanh)
-        self.l_recurrent = l_recurrent
-        """
-        l_recurrent = lasagne.layers.ReshapeLayer(l_recurrent, shape=(self.input_shapes[0][0] * self.input_shapes[0][1], self.input_shapes[0][2]))
-        l_dropout = lasagne.layers.DropoutLayer(l_recurrent, p=0.5)
-        l_dropout = lasagne.layers.ReshapeLayer(l_dropout, shape=self.input_shapes[0])
-        """
-        self.network = l_recurrent
+        self.l_recurrent = lasagne.layers.RecurrentLayer(l_in,
+                                                         self.embedding_size,
+                                                         W_in_to_hid=W_in_to_hid,
+                                                         W_hid_to_hid=W_hid_to_hid,
+                                                         b=None,
+                                                         nonlinearity=lasagne.nonlinearities.tanh)
+#        self.network = lasagne.layers.DropoutLayer(self.l_recurrent, p=0.5)
+        self.network = self.l_recurrent
 
         params = lasagne.layers.helper.get_all_params(self.network, trainable=True)
         values = lasagne.layers.helper.get_all_param_values(self.network, trainable=True)
