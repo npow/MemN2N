@@ -1,5 +1,6 @@
 .ipynb_checkpoints/
 data/
+dataset_*/
 *.txt
 *.gz
 *.pyc

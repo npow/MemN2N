@@ -1,9 +1,11 @@
 from __future__ import division
 import argparse
+import cPickle
 import glob
 import lasagne
 import nltk
 import numpy as np
+import pyprind
 import sys
 import theano
 import theano.tensor as T
@@ -146,7 +148,7 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0, :], zero_vec_tensor)) for x in [self.A, self.C]])
 
     def get_output_shape_for(self, input_shapes):
-        return self.network.get_output_shape()
+        return lasagne.layers.helper.get_output_shape(self.network)
 
     def get_output_for(self, inputs, **kwargs):
         return lasagne.layers.helper.get_output(self.network, {self.l_context_in: inputs[0], self.l_B_embedding: inputs[1], self.l_context_pe_in: inputs[2]})
@@ -157,45 +159,44 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
 
 class Model:
 
-    def __init__(self, train_file, test_file, batch_size=32, embedding_size=20, max_norm=40, lr=0.01, num_hops=3, adj_weight_tying=True, linear_start=True, **kwargs):
-        train_lines, test_lines = self.get_lines(train_file), self.get_lines(test_file)
-        lines = np.concatenate([train_lines, test_lines], axis=0)
-        vocab, word_to_idx, idx_to_word, max_seqlen, max_sentlen = self.get_vocab(lines)
+    def __init__(self,
+                 data,
+                 vocab,
+                 S,
+                 batch_size=32,
+                 embedding_size=20,
+                 max_norm=40,
+                 lr=0.01,
+                 num_hops=3,
+                 adj_weight_tying=True,
+                 linear_start=True,
+                 input_dir='dataset_1MM',
+                 suffix='',
+                 max_seqlen=20,
+                 max_sentlen=20,
+                 **kwargs):
 
-        self.data = {'train': {}, 'test': {}}
-        S_train, self.data['train']['C'], self.data['train']['Q'], self.data['train']['Y'] = self.process_dataset(train_lines, word_to_idx, max_sentlen, offset=0)
-        S_test, self.data['test']['C'], self.data['test']['Q'], self.data['test']['Y'] = self.process_dataset(test_lines, word_to_idx, max_sentlen, offset=len(S_train))
-        S = np.concatenate([np.zeros((1, max_sentlen), dtype=np.int32), S_train, S_test], axis=0)
-        for i in range(10):
-            for k in ['C', 'Q', 'Y']:
-                print k, self.data['test'][k][i]
+        self.data = data
+        self.vocab = vocab
+        self.S = S
+        self.num_classes = 1
+
         print 'batch_size:', batch_size, 'max_seqlen:', max_seqlen, 'max_sentlen:', max_sentlen
-        print 'sentences:', S.shape
-        print 'vocab:', len(vocab), vocab
         for d in ['train', 'test']:
             print d,
             for k in ['C', 'Q', 'Y']:
                 print k, self.data[d][k].shape,
             print ''
 
-        lb = LabelBinarizer()
-        lb.fit(list(vocab))
-        vocab = lb.classes_.tolist()
-
         self.batch_size = batch_size
         self.max_seqlen = max_seqlen
         self.max_sentlen = max_sentlen
         self.embedding_size = embedding_size
-        self.num_classes = len(vocab) + 1
-        self.vocab = vocab
         self.adj_weight_tying = adj_weight_tying
         self.num_hops = num_hops
-        self.lb = lb
         self.init_lr = lr
         self.lr = self.init_lr
         self.max_norm = max_norm
-        self.S = S
-        self.idx_to_word = idx_to_word
         self.nonlinearity = None if linear_start else lasagne.nonlinearities.softmax
 
         self.build_network(self.nonlinearity)
@@ -214,7 +215,7 @@ class Model:
         self.c_pe_shared = theano.shared(np.zeros((batch_size, max_seqlen, max_sentlen, embedding_size), dtype=theano.config.floatX), borrow=True)
         self.q_pe_shared = theano.shared(np.zeros((batch_size, 1, max_sentlen, embedding_size), dtype=theano.config.floatX), borrow=True)
         S_shared = theano.shared(self.S, borrow=True)
-
+        
         cc = S_shared[c.flatten()].reshape((batch_size, max_seqlen, max_sentlen))
         qq = S_shared[q.flatten()].reshape((batch_size, max_sentlen))
 
@@ -273,7 +274,7 @@ class Model:
         }
 
         self.train_model = theano.function([], cost, givens=givens, updates=updates)
-        self.compute_pred = theano.function([], pred, givens=givens, on_unused_input='ignore')
+        self.compute_probas = theano.function([], probas, givens=givens, on_unused_input='ignore')
 
         zero_vec_tensor = T.vector()
         self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
@@ -287,27 +288,49 @@ class Model:
         for l in self.mem_layers:
             l.reset_zero()
 
-    def predict(self, dataset, index):
+    def predict_proba(self, dataset, index):
         self.set_shared_variables(dataset, index)
-        return self.compute_pred()
+        return self.compute_probas()
 
-    def compute_f1(self, dataset):
+    def report_perf(self, dataset):
         n_batches = len(dataset['Y']) // self.batch_size
-        y_pred = np.concatenate([self.predict(dataset, i) for i in xrange(n_batches)]).astype(np.int32) - 1
-        y_true = [self.vocab.index(y) for y in dataset['Y'][:len(y_pred)]]
-        print metrics.confusion_matrix(y_true, y_pred)
-        print metrics.classification_report(y_true, y_pred)
-        errors = []
-        for i, (t, p) in enumerate(zip(y_true, y_pred)):
-            if t != p:
-                errors.append((i, self.lb.classes_[p]))
-        return metrics.f1_score(y_true, y_pred, average='weighted', pos_label=None), errors
+        probas = np.concatenate([self.predict_proba(dataset, i) for i in xrange(n_batches)])
+        self.compute_recall_ks(probas)
+
+    def compute_recall_ks(self, probas):
+      recall_k = {}
+      for group_size in [2, 10]:
+          recall_k[group_size] = {}
+          print 'group_size: %d' % group_size
+          for k in [1, 2, 5]:
+              if k < group_size:
+                  recall_k[group_size][k] = self.recall(probas, k, group_size)
+                  print 'recall@%d' % k, recall_k[group_size][k]
+      return recall_k
+                
+    def recall(self, probas, k, group_size):
+        test_size = 10
+        n_batches = len(probas) // test_size
+        n_correct = 0
+        for i in xrange(n_batches):
+            batch = np.array(probas[i*test_size:(i+1)*test_size])[:group_size]
+            #p = np.random.permutation(len(batch))
+            #indices = p[np.argpartition(batch[p], -k)[-k:]]
+            indices = np.argpartition(batch, -k)[-k:]
+            if 0 in indices:
+                n_correct += 1
+        return n_correct / (len(probas) / test_size)
 
     def train(self, n_epochs=100, shuffle_batch=False):
         epoch = 0
+        best_val_perf = 0
+        best_val_rk1 = 0
+        test_perf = 0
+        cost_epoch = 0
+
         n_train_batches = len(self.data['train']['Y']) // self.batch_size
-        self.lr = self.init_lr
-        prev_train_f1 = None
+        n_val_batches = len(self.data['val']['Y']) // self.batch_size
+        n_test_batches = len(self.data['test']['Y']) // self.batch_size
 
         while (epoch < n_epochs):
             epoch += 1
@@ -318,51 +341,51 @@ class Model:
             indices = range(n_train_batches)
             if shuffle_batch:
                 self.shuffle_sync(self.data['train'])
-
+            bar = pyprind.ProgBar(len(indices), monitor=True)
             total_cost = 0
             start_time = time.time()
             for minibatch_index in indices:
                 self.set_shared_variables(self.data['train'], minibatch_index)
-                total_cost += self.train_model()
+                cost_epoch = self.train_model()
+                total_cost += cost_epoch
                 self.reset_zero()
+                bar.update()
             end_time = time.time()
-            print '\n' * 3, '*' * 80
-            print 'epoch:', epoch, 'cost:', (total_cost / len(indices)), ' took: %d(s)' % (end_time - start_time)
+            print "cost: ", (total_cost / len(indices)), " took: %d(s)" % (end_time - start_time)
+            train_losses = [self.compute_loss(self.data['train'], i) for i in xrange(n_train_batches)]
+            train_perf = 1 - np.sum(train_losses) / len(self.data['train']['y'])
+            val_losses = [self.compute_loss(self.data['val'], i) for i in xrange(n_val_batches)]
+            val_perf = 1 - np.sum(val_losses) / len(self.data['val']['y'])
+            print 'epoch %i, train_perf %f, val_perf %f' % (epoch, train_perf*100, val_perf*100)
 
-            print 'TRAIN', '=' * 40
-            train_f1, train_errors = self.compute_f1(self.data['train'])
-            print 'TRAIN_ERROR:', (1-train_f1)*100
-            if False:
-                for i, pred in train_errors[:10]:
-                    print 'context: ', self.to_words(self.data['train']['C'][i])
-                    print 'question: ', self.to_words([self.data['train']['Q'][i]])
-                    print 'correct answer: ', self.data['train']['Y'][i]
-                    print 'predicted answer: ', pred
-                    print '---' * 20
+            val_probas = np.concatenate([self.compute_probas(self.data['val'], i) for i in xrange(n_val_batches)])
+            val_recall_k = self.compute_recall_ks(val_probas)
 
-            if prev_train_f1 is not None and train_f1 < prev_train_f1 and self.nonlinearity is None:
+            if prev_val_recall_k is not None and val_recall_k > prev_val_recall_k and self.nonlinearity is None:
                 prev_weights = lasagne.layers.helper.get_all_param_values(self.network)
                 self.build_network(nonlinearity=lasagne.nonlinearities.softmax)
                 lasagne.layers.helper.set_all_param_values(self.network, prev_weights)
             else:
-                print 'TEST', '=' * 40
-                test_f1, test_errors = self.compute_f1(self.data['test'])
-                print '*** TEST_ERROR:', (1-test_f1)*100
+                if val_perf > best_val_perf or val_recall_k[10][1] > best_val_rk1:
+                    best_val_perf = val_perf
+                    best_val_rk1 = val_recall_k[10][1]
+                    test_losses = [self.compute_loss(self.data['test'], i) for i in xrange(n_test_batches)]
+                    test_perf = 1 - np.sum(test_losses) / len(self.data['test']['y'])
+                    print 'test_perf: %f' % (test_perf*100)
+                    test_probas = np.concatenate([self.compute_probas(self.data['test'], i) for i in xrange(n_test_batches)])
+                    self.compute_recall_ks(test_probas)
+                else:
+                    break
 
-            prev_train_f1 = train_f1
+            prev_val_recall_k = val_recall_k
 
-    def to_words(self, indices):
-        sents = []
-        for idx in indices:
-            words = ' '.join([self.idx_to_word[idx] for idx in self.S[idx] if idx > 0])
-            sents.append(words)
-        return ' '.join(sents)
+        return test_perf
 
     def shuffle_sync(self, dataset):
         p = np.random.permutation(len(dataset['Y']))
         for k in ['C', 'Q', 'Y']:
             dataset[k] = dataset[k][p]
-
+            
     def set_shared_variables(self, dataset, index):
         c = np.zeros((self.batch_size, self.max_seqlen), dtype=np.int32)
         q = np.zeros((self.batch_size, ), dtype=np.int32)
@@ -385,7 +408,7 @@ class Model:
                     for j in np.arange(J):
                         mask[i, ii, j, :] = (1 - (j+1)/J) - ((np.arange(self.embedding_size)+1)/self.embedding_size)*(1 - 2*(j+1)/J)
 
-        y[:len(indices), 1:self.num_classes] = self.lb.transform(dataset['Y'][indices])
+        y[:len(indices)] = dataset['Y'][indices].reshape((-1,1))
 
         self.c_shared.set_value(c)
         self.q_shared.set_value(q)
@@ -393,70 +416,53 @@ class Model:
         self.c_pe_shared.set_value(c_pe)
         self.q_pe_shared.set_value(q_pe)
 
-    def get_vocab(self, lines):
-        vocab = set()
-        max_sentlen = 0
-        for i, line in enumerate(lines):
-            words = nltk.word_tokenize(line['text'])
-            max_sentlen = max(max_sentlen, len(words))
-            for w in words:
-                vocab.add(w)
-            if line['type'] == 'q':
-                vocab.add(line['answer'])
 
-        word_to_idx = {}
-        for w in vocab:
-            word_to_idx[w] = len(word_to_idx) + 1
+def split_utterances(utterances, eos_idx):
+    return [[int(yy) for yy in y.split()] for y in ' '.join([str(x) for x in utterances]).split(eos_idx)]
 
-        idx_to_word = {}
-        for w, idx in word_to_idx.iteritems():
-            idx_to_word[idx] = w
 
-        max_seqlen = 0
-        for i, line in enumerate(lines):
-            if line['type'] == 'q':
-                id = line['id']-1
-                indices = [idx for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1][:50]
-                max_seqlen = max(len(indices), max_seqlen)
+def process_dataset(dataset, max_seqlen, max_sentlen, offset, eos_idx='63346'):
+    S, C, Q, Y = [], [], [], []
 
-        return vocab, word_to_idx, idx_to_word, max_seqlen, max_sentlen
-
-    def process_dataset(self, lines, word_to_idx, max_sentlen, offset):
-        S, C, Q, Y = [], [], [], []
-
-        for i, line in enumerate(lines):
-            word_indices = [word_to_idx[w] for w in nltk.word_tokenize(line['text'])]
+    for i, row in enumerate(dataset['c']):
+        utterances = split_utterances(row, eos_idx)
+        if i > 100:
+            break
+        for ii, utterance in enumerate(utterances):
+            word_indices = utterance[:max_sentlen]
             word_indices += [0] * (max_sentlen - len(word_indices))
             S.append(word_indices)
-            if line['type'] == 'q':
-                id = line['id']-1
-                indices = [offset+idx+1 for idx in range(i-id, i) if lines[idx]['type'] == 's'][::-1][:50]
-                line['refs'] = [indices.index(offset+i+1-id+ref) for ref in line['refs']]
-                C.append(indices)
-                Q.append(offset+i+1)
-                Y.append(line['answer'])
-        return np.array(S, dtype=np.int32), np.array(C), np.array(Q, dtype=np.int32), np.array(Y)
 
-    def get_lines(self, fname):
-        lines = []
-        for i, line in enumerate(open(fname)):
-            id = int(line[0:line.find(' ')])
-            line = line.strip()
-            line = line[line.find(' ')+1:]
-            if line.find('?') == -1:
-                lines.append({'type': 's', 'text': line})
-            else:
-                idx = line.find('?')
-                tmp = line[idx+1:].split('\t')
-                lines.append({'id': id, 'type': 'q', 'text': line[:idx], 'answer': tmp[1].strip(), 'refs': [int(x)-1 for x in tmp[2:][0].split(' ')]})
-            if False and i > 1000:
-                break
-        return np.array(lines)
+            if ii == len(utterances)-1:
+                indices = [offset+idx+1 for idx in range(len(S)-len(utterances)-1, len(S)-1)][:max_seqlen]
+                C.append(indices)
+                
+                response = split_utterances(dataset['r'][i], eos_idx)[0][:max_sentlen]
+                response += [0] * (max_sentlen - len(response))
+                S.append(response)
+                Q.append(offset+len(S)-1)
+                
+                Y.append(dataset['y'][i])
+    return S, np.array(C), np.array(Q, dtype=np.int32), np.array(Y, dtype=np.int32)
 
 
 def str2bool(v):
     return v.lower() in ('yes', 'true', 't', '1')
 
+
+def load_data(input_dir, suffix, max_seqlen, max_sentlen):
+    if False:
+        train_data, val_data, test_data = cPickle.load(open('%s/dataset%s.pkl' % (input_dir, suffix), 'rb'))
+        vocab = cPickle.load(open('%s/vocab%s.pkl' % (input_dir, suffix), 'rb'))
+        data = {'train': {}, 'val': {}, 'test': {}}
+        S_train, data['train']['C'], data['train']['Q'], data['train']['Y'] = process_dataset(train_data, max_seqlen, max_sentlen, offset=0)
+        S_val, data['val']['C'], data['val']['Q'], data['val']['Y'] = process_dataset(val_data, max_seqlen, max_sentlen, offset=len(S_train))
+        S_test, data['test']['C'], data['test']['Q'], data['test']['Y'] = process_dataset(test_data, max_seqlen, max_sentlen, offset=len(S_train)+len(S_val))
+        S = np.concatenate([np.zeros((1, max_sentlen), dtype=np.int32), S_train, S_val, S_test], axis=0)
+    else:
+        data, vocab, S = cPickle.load(open('blobs.pkl'))
+
+    return data, vocab, S
 
 def main():
     parser = argparse.ArgumentParser()
@@ -473,14 +479,16 @@ def main():
     parser.add_argument('--linear_start', type='bool', default=False, help='Whether to start with linear activations')
     parser.add_argument('--shuffle_batch', type='bool', default=True, help='Whether to shuffle minibatches')
     parser.add_argument('--n_epochs', type=int, default=100, help='Num epochs')
+    parser.add_argument('--input_dir', type=str, default='.', help='Input dir')
+    parser.add_argument('--suffix', type=str, default='', help='Suffix')
+    parser.add_argument('--max_seqlen', type=int, default=20, help='Max seqlen')
+    parser.add_argument('--max_sentlen', type=int, default=50, help='Max sentlen')
     args = parser.parse_args()
     print '*' * 80
     print 'args:', args
     print '*' * 80
 
-    if args.train_file == '' or args.test_file == '':
-        args.train_file = glob.glob('data/en/qa%d_*train.txt' % args.task)[0]
-        args.test_file = glob.glob('data/en/qa%d_*test.txt' % args.task)[0]
+    args.data, args.vocab, args.S = load_data(args.input_dir, args.suffix, args.max_seqlen, args.max_sentlen)
 
     model = Model(**args.__dict__)
     model.train(n_epochs=args.n_epochs, shuffle_batch=args.shuffle_batch)
