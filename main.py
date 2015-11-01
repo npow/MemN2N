@@ -437,8 +437,6 @@ def process_dataset(dataset, max_seqlen, max_sentlen, offset, eos_idx='63346'):
 
     for i, row in enumerate(dataset['c']):
         utterances = split_utterances(row, eos_idx)
-        if i > 100:
-            break
         for ii, utterance in enumerate(utterances):
             word_indices = utterance[:max_sentlen]
             word_indices += [0] * (max_sentlen - len(word_indices))
