@@ -462,7 +462,7 @@ def str2bool(v):
 
 
 def load_data(input_dir, suffix, max_seqlen, max_sentlen):
-    if False:
+    if True:
         train_data, val_data, test_data = cPickle.load(open('%s/dataset%s.pkl' % (input_dir, suffix), 'rb'))
         vocab = cPickle.load(open('%s/vocab%s.pkl' % (input_dir, suffix), 'rb'))
         data = {'train': {}, 'val': {}, 'test': {}}
@@ -490,7 +490,7 @@ def main():
     parser.add_argument('--linear_start', type='bool', default=False, help='Whether to start with linear activations')
     parser.add_argument('--shuffle_batch', type='bool', default=True, help='Whether to shuffle minibatches')
     parser.add_argument('--n_epochs', type=int, default=100, help='Num epochs')
-    parser.add_argument('--input_dir', type=str, default='.', help='Input dir')
+    parser.add_argument('--input_dir', type=str, default='dataset_1MM', help='Input dir')
     parser.add_argument('--suffix', type=str, default='', help='Suffix')
     parser.add_argument('--max_seqlen', type=int, default=20, help='Max seqlen')
     parser.add_argument('--max_sentlen', type=int, default=50, help='Max sentlen')
