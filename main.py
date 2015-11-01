@@ -146,7 +146,7 @@ class MemoryNetworkLayer(lasagne.layers.MergeLayer):
         self.set_zero = theano.function([zero_vec_tensor], updates=[(x, T.set_subtensor(x[0, :], zero_vec_tensor)) for x in [self.A, self.C]])
 
     def get_output_shape_for(self, input_shapes):
-        return self.network.get_output_shape()
+        return lasagne.layers.helper.get_output_shape(self.network)
 
     def get_output_for(self, inputs, **kwargs):
         return lasagne.layers.helper.get_output(self.network, {self.l_context_in: inputs[0], self.l_B_embedding: inputs[1], self.l_context_pe_in: inputs[2]})
