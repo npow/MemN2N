@@ -4,3 +4,5 @@ dataset_*/
 *.txt
 *.gz
 *.pyc
+*.pkl
+*.tgz

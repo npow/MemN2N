@@ -168,7 +168,7 @@ class Model:
                  max_norm=40,
                  lr=0.01,
                  num_hops=3,
-                 adj_weight_tying=True,
+                 adj_weight_tying=False,
                  linear_start=True,
                  input_dir='dataset_1MM',
                  suffix='',
@@ -176,10 +176,11 @@ class Model:
                  max_sentlen=20,
                  **kwargs):
 
+        assert not adj_weight_tying
         self.data = data
         self.vocab = vocab
         self.S = S
-        self.num_classes = 1
+        self.num_classes = 2
 
         print 'batch_size:', batch_size, 'max_seqlen:', max_seqlen, 'max_sentlen:', max_sentlen
         for d in ['train', 'test']:
@@ -255,7 +256,8 @@ class Model:
         probas = lasagne.layers.helper.get_output(l_pred, {l_context_in: cc, l_question_in: qq, l_context_pe_in: c_pe, l_question_pe_in: q_pe})
         probas = T.clip(probas, 1e-7, 1.0-1e-7)
 
-        pred = T.argmax(probas, axis=1)
+        pred = T.argmax(probas, axis=1, keepdims=True)
+        errors = T.sum(T.neq(pred, y))
 
         cost = T.nnet.binary_crossentropy(probas, y).sum()
 
@@ -274,7 +276,8 @@ class Model:
         }
 
         self.train_model = theano.function([], cost, givens=givens, updates=updates)
-        self.compute_probas = theano.function([], probas, givens=givens, on_unused_input='ignore')
+        self.get_probas = theano.function([], probas, givens=givens, on_unused_input='warn')
+        self.get_loss = theano.function([], errors, givens=givens, on_unused_input='warn')
 
         zero_vec_tensor = T.vector()
         self.zero_vec = np.zeros(embedding_size, dtype=theano.config.floatX)
@@ -288,13 +291,17 @@ class Model:
         for l in self.mem_layers:
             l.reset_zero()
 
-    def predict_proba(self, dataset, index):
+    def compute_loss(self, dataset, index):
         self.set_shared_variables(dataset, index)
-        return self.compute_probas()
+        return self.get_loss()
+
+    def compute_probas(self, dataset, index):
+        self.set_shared_variables(dataset, index)
+        return self.get_probas()[:,1]
 
     def report_perf(self, dataset):
         n_batches = len(dataset['Y']) // self.batch_size
-        probas = np.concatenate([self.predict_proba(dataset, i) for i in xrange(n_batches)])
+        probas = np.concatenate([self.compute_probas(dataset, i) for i in xrange(n_batches)])
         self.compute_recall_ks(probas)
 
     def compute_recall_ks(self, probas):
@@ -325,6 +332,7 @@ class Model:
         epoch = 0
         best_val_perf = 0
         best_val_rk1 = 0
+        prev_val_rk1 = None
         test_perf = 0
         cost_epoch = 0
 
@@ -353,31 +361,32 @@ class Model:
             end_time = time.time()
             print "cost: ", (total_cost / len(indices)), " took: %d(s)" % (end_time - start_time)
             train_losses = [self.compute_loss(self.data['train'], i) for i in xrange(n_train_batches)]
-            train_perf = 1 - np.sum(train_losses) / len(self.data['train']['y'])
+            train_perf = 1 - np.sum(train_losses) / len(self.data['train']['Y'])
             val_losses = [self.compute_loss(self.data['val'], i) for i in xrange(n_val_batches)]
-            val_perf = 1 - np.sum(val_losses) / len(self.data['val']['y'])
+            val_perf = 1 - np.sum(val_losses) / len(self.data['val']['Y'])
             print 'epoch %i, train_perf %f, val_perf %f' % (epoch, train_perf*100, val_perf*100)
 
             val_probas = np.concatenate([self.compute_probas(self.data['val'], i) for i in xrange(n_val_batches)])
             val_recall_k = self.compute_recall_ks(val_probas)
+            val_rk1 = val_recall_k[10][1]
 
-            if prev_val_recall_k is not None and val_recall_k > prev_val_recall_k and self.nonlinearity is None:
+            if prev_val_rk1 is not None and val_rk1 > prev_val_rk1 and self.nonlinearity is None:
                 prev_weights = lasagne.layers.helper.get_all_param_values(self.network)
                 self.build_network(nonlinearity=lasagne.nonlinearities.softmax)
                 lasagne.layers.helper.set_all_param_values(self.network, prev_weights)
             else:
-                if val_perf > best_val_perf or val_recall_k[10][1] > best_val_rk1:
+                if val_perf > best_val_perf or val_rk1 > best_val_rk1:
                     best_val_perf = val_perf
-                    best_val_rk1 = val_recall_k[10][1]
+                    best_val_rk1 = val_rk1
                     test_losses = [self.compute_loss(self.data['test'], i) for i in xrange(n_test_batches)]
-                    test_perf = 1 - np.sum(test_losses) / len(self.data['test']['y'])
+                    test_perf = 1 - np.sum(test_losses) / len(self.data['test']['Y'])
                     print 'test_perf: %f' % (test_perf*100)
                     test_probas = np.concatenate([self.compute_probas(self.data['test'], i) for i in xrange(n_test_batches)])
                     self.compute_recall_ks(test_probas)
                 else:
                     break
 
-            prev_val_recall_k = val_recall_k
+            prev_val_rk1 = val_rk1
 
         return test_perf
 
@@ -408,7 +417,9 @@ class Model:
                     for j in np.arange(J):
                         mask[i, ii, j, :] = (1 - (j+1)/J) - ((np.arange(self.embedding_size)+1)/self.embedding_size)*(1 - 2*(j+1)/J)
 
-        y[:len(indices)] = dataset['Y'][indices].reshape((-1,1))
+        for i, row in enumerate(dataset['Y'][indices]):
+            y[i, 0] = 1 - row
+            y[i, 1] = row
 
         self.c_shared.set_value(c)
         self.q_shared.set_value(q)
@@ -475,7 +486,7 @@ def main():
     parser.add_argument('--max_norm', type=float, default=40.0, help='Max norm')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--num_hops', type=int, default=3, help='Num hops')
-    parser.add_argument('--adj_weight_tying', type='bool', default=True, help='Whether to use adjacent weight tying')
+    parser.add_argument('--adj_weight_tying', type='bool', default=False, help='Whether to use adjacent weight tying')
     parser.add_argument('--linear_start', type='bool', default=False, help='Whether to start with linear activations')
     parser.add_argument('--shuffle_batch', type='bool', default=True, help='Whether to shuffle minibatches')
     parser.add_argument('--n_epochs', type=int, default=100, help='Num epochs')
