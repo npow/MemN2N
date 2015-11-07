@@ -176,11 +176,10 @@ class Model:
                  max_sentlen=20,
                  **kwargs):
 
-        assert not adj_weight_tying
         self.data = data
         self.vocab = vocab
         self.S = S
-        self.num_classes = 2
+        self.num_classes = 1
 
         print 'batch_size:', batch_size, 'max_seqlen:', max_seqlen, 'max_sentlen:', max_sentlen
         for d in ['train', 'test']:
@@ -248,18 +247,19 @@ class Model:
                 A_T, C_T = self.mem_layers[-1].A_T, self.mem_layers[-1].C_T
             self.mem_layers += [MemoryNetworkLayer((l_context_in, self.mem_layers[-1], l_context_pe_in), vocab, embedding_size, A=A, A_T=A_T, C=C, C_T=C_T, nonlinearity=nonlinearity)]
 
-        if self.adj_weight_tying:
+        if False and self.adj_weight_tying:
             l_pred = TransposedDenseLayer(self.mem_layers[-1], self.num_classes, W=self.mem_layers[-1].C, b=None, nonlinearity=lasagne.nonlinearities.softmax)
         else:
             l_pred = lasagne.layers.DenseLayer(self.mem_layers[-1], self.num_classes, W=lasagne.init.Normal(std=0.1), b=None, nonlinearity=lasagne.nonlinearities.softmax)
 
-        probas = lasagne.layers.helper.get_output(l_pred, {l_context_in: cc, l_question_in: qq, l_context_pe_in: c_pe, l_question_pe_in: q_pe})
-        probas = T.clip(probas, 1e-7, 1.0-1e-7)
+        o = lasagne.layers.helper.get_output(l_pred, {l_context_in: cc, l_question_in: qq, l_context_pe_in: c_pe, l_question_pe_in: q_pe})
+        o = T.clip(o, 1e-7, 1.0-1e-7)
 
-        pred = T.argmax(probas, axis=1, keepdims=True)
+        probas = T.concatenate([(1-o).reshape((-1,1)), o.reshape((-1,1))], axis=1)
+        pred = T.argmax(probas, axis=1)
         errors = T.sum(T.neq(pred, y))
 
-        cost = T.nnet.binary_crossentropy(probas, y).sum()
+        cost = T.nnet.binary_crossentropy(o, y).sum()
 
         params = lasagne.layers.helper.get_all_params(l_pred, trainable=True)
         print 'params:', params
@@ -417,9 +417,7 @@ class Model:
                     for j in np.arange(J):
                         mask[i, ii, j, :] = (1 - (j+1)/J) - ((np.arange(self.embedding_size)+1)/self.embedding_size)*(1 - 2*(j+1)/J)
 
-        for i, row in enumerate(dataset['Y'][indices]):
-            y[i, 0] = 1 - row
-            y[i, 1] = row
+        y[:len(indices)] = dataset['Y'][indices].reshape((-1, 1))
 
         self.c_shared.set_value(c)
         self.q_shared.set_value(q)
@@ -484,9 +482,9 @@ def main():
     parser.add_argument('--max_norm', type=float, default=40.0, help='Max norm')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
     parser.add_argument('--num_hops', type=int, default=3, help='Num hops')
-    parser.add_argument('--adj_weight_tying', type='bool', default=False, help='Whether to use adjacent weight tying')
+    parser.add_argument('--adj_weight_tying', type='bool', default=True, help='Whether to use adjacent weight tying')
     parser.add_argument('--linear_start', type='bool', default=False, help='Whether to start with linear activations')
-    parser.add_argument('--shuffle_batch', type='bool', default=True, help='Whether to shuffle minibatches')
+    parser.add_argument('--shuffle_batch', type='bool', default=False, help='Whether to shuffle minibatches')
     parser.add_argument('--n_epochs', type=int, default=100, help='Num epochs')
     parser.add_argument('--input_dir', type=str, default='dataset_1MM', help='Input dir')
     parser.add_argument('--suffix', type=str, default='', help='Suffix')
