@@ -256,7 +256,7 @@ class Model:
         o = T.clip(o, 1e-7, 1.0-1e-7)
 
         probas = T.concatenate([(1-o).reshape((-1,1)), o.reshape((-1,1))], axis=1)
-        pred = T.argmax(probas, axis=1)
+        pred = T.argmax(probas, axis=1, keepdims=True)
         errors = T.sum(T.neq(pred, y))
 
         cost = T.nnet.binary_crossentropy(o, y).sum()
