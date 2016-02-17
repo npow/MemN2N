@@ -3,7 +3,7 @@
 tasks="1 2 3 4 5 6 9 10 11 12 13 14 15 16 17 18 20"
 time for task in $tasks; do
   echo "running task: $task"
-  for run in `jot 10`; do
+  for run in {1..10}; do
     python -u main.py --task $task > results/${task}_${run}.txt 2>/dev/null &
   done
   wait
